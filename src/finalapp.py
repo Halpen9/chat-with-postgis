@@ -4,6 +4,7 @@ from langchain_core.prompts import ChatPromptTemplate
 from langchain_community.utilities import SQLDatabase
 from langchain_core.runnables import RunnablePassthrough
 from langchain_core.output_parsers import StrOutputParser
+from langchain_openai import ChatOpenAI
 from langsmith import traceable,Client
 from langchain_groq import ChatGroq
 import streamlit as st
@@ -11,11 +12,16 @@ import os
 
 
 load_dotenv()
-host = os.getenv("MYSQL_HOST")
-port = os.getenv("MYSQL_PORT")
-user = os.getenv("MYSQL_USER")
-password = os.getenv("MYSQL_PASSWORD")
-database = os.getenv("MYSQL_DATABASE")
+#host = os.getenv("MYSQL_HOST")
+#port = os.getenv("MYSQL_PORT")
+#user = os.getenv("MYSQL_USER")
+#password = os.getenv("MYSQL_PASSWORD")
+#database = os.getenv("MYSQL_DATABASE")
+host = os.getenv("POSTGRES_HOST")
+port = os.getenv("POSTGRES_PORT")
+user = os.getenv("POSTGRES_USER")
+password = os.getenv("POSTGRES_PASSWORD")
+database = os.getenv("POSTGRES_DATABASE")
 os.environ["LANGCHAIN_TRACING_V2"] = os.getenv("LANGCHAIN_TRACING_V2", "true")
 os.environ["LANGCHAIN_API_KEY"] = os.getenv("LANGCHAIN_API_KEY")
 os.environ["LANGCHAIN_PROJECT"] = os.getenv("LANGCHAIN_PROJECT", "finalapp")
@@ -23,14 +29,15 @@ os.environ["LANGCHAIN_PROJECT"] = os.getenv("LANGCHAIN_PROJECT", "finalapp")
 client = Client()
 
 def init_database(user: str, password: str, host: str, port: str, database: str)-> SQLDatabase:
-    db_uri = f"mysql+mysqlconnector://{user}:{password}@{host}:{port}/{database}"
+    #db_uri = f"mysql+mysqlconnector://{user}:{password}@{host}:{port}/{database}"
+    db_uri = f"postgresql+psycopg2://{user}:{password}@{host}:{port}/{database}"
     return SQLDatabase.from_uri(db_uri)
 
 @traceable(name="SQL Query Generator")
 def get_sql_chain(db):
     template = """
 Tu es un data analyst travaillant pour une entreprise.
-Tu échanges avec un utilisateur qui te pose des questions sur la base de données de l'entreprise.
+Tu échanges avec un utilisateur qui te pose des questions sur la base de données spatial (postgis) de l'entreprise.
 
 À partir du schéma des tables ci-dessous, écris une requête SQL qui permettrait de répondre à la question de l'utilisateur.
 Tiens également compte de l'historique de la conversation pour formuler ta réponse.
@@ -42,23 +49,28 @@ Historique de la conversation : {chat_history}
 Rédige uniquement la requête SQL — sans aucun texte explicatif, sans commentaire et sans backticks.
 
 Exemple :
-Question : Quels sont les 5 clients qui ont payé le plus d'argent au total ?
+Question : Trouver les bureaux dans un rayon de 100 km autour de Paris ?
 Requête SQL : 
-SELECT 
-    c.customerName, 
-    c.country,
-    SUM(p.amount) as total_paid
-FROM customers c
-JOIN payments p ON c.customerNumber = p.customerNumber
-GROUP BY c.customerNumber, c.customerName, c.country
-ORDER BY total_paid DESC
-LIMIT 5;
+SELECT o.name, c.name AS city
+FROM offices o
+JOIN cities c ON o.city_id = c.id
+WHERE ST_DistanceSphere(o.geom, ST_GeomFromText('POINT(2.3522 48.8566)', 4326)) < 100000;
 
-Question : Montre-moi tous les bureaux avec leur ville et leur pays.
+
+Question : Trouver les clients à moins de 50 km du bureau de Lyon.
 Requête SQL : 
-SELECT city, country
-FROM offices 
-ORDER BY country;
+SELECT cl.name, cl.revenue
+FROM clients cl
+JOIN offices o ON cl.office_id = o.id
+WHERE o.name = 'Lyon Center'
+AND ST_DistanceSphere(cl.geom, o.geom) < 50000;
+
+Question : Calculer la distance entre Paris et Marseille.
+Requête SQL : 
+SELECT ST_DistanceSphere(
+    (SELECT geom FROM cities WHERE name = 'Paris'),
+    (SELECT geom FROM cities WHERE name = 'Marseille')
+) / 1000 AS distance_km;
 
 À ton tour :
 
@@ -67,8 +79,8 @@ Requête SQL :
 """
     prompt = ChatPromptTemplate.from_template(template)
 
-    llm = ChatGroq(model="llama-3.3-70b-versatile", temperature=0)
-
+    #llm = ChatGroq(model="llama-3.3-70b-versatile", temperature=0)
+    llm= ChatOpenAI(model= "gpt-4o-mini")
     def get_schema(_):
         return db.get_table_info()
     
@@ -86,7 +98,7 @@ def get_response(user_query : str, db: SQLDatabase, chat_history: list):
 
     template = """
     Tu es un data analyst travaillant pour une entreprise.  
-Tu échanges avec un utilisateur qui te pose des questions sur la base de données de l'entreprise.
+Tu échanges avec un utilisateur qui te pose des questions sur la base de données spatial (postgis) de l'entreprise.
 
 En te basant sur :
 - le schéma des tables ci-dessous,  
@@ -94,7 +106,7 @@ En te basant sur :
 - la requête SQL générée,  
 - et le résultat de cette requête,  
 
-rédige une **réponse claire et naturelle** en français, adaptée à l'utilisateur.
+rédige une **réponse claire et naturelle** en français, adaptée à l'utilisateur. Donne aussi la requete sql en fin de réponse.
 
 <SCHEMA>{schema}</SCHEMA>
 
@@ -105,7 +117,8 @@ Résultat SQL : {response}"""
 
     prompt = ChatPromptTemplate.from_template(template)
 
-    llm = ChatGroq(model="llama-3.3-70b-versatile", temperature=0)
+    #llm = ChatGroq(model="llama-3.3-70b-versatile", temperature=0)
+    llm= ChatOpenAI(model= "gpt-4o-mini")
 
     chain = (
         RunnablePassthrough.assign(query=sql_chain).assign(
@@ -129,12 +142,12 @@ if "chat_history" not in st.session_state:
 
 
 
-st.set_page_config(page_title="Discute avec MySQL", page_icon=":speech_balloon:")
-st.title("Discute avec MySQL")
+st.set_page_config(page_title="Discute avec ta base de donnée", page_icon=":speech_balloon:")
+st.title("Discute avec ta base de donnée")
 
 with st.sidebar:
     st.subheader("Paramètres")
-    st.write("C'est une simple application de discussion utilisant MySQL. Connectez vous à la base de donnée pour commencer la discussion")
+    st.write("C'est une simple application de discussion utilisant SQL. Connectez vous à la base de donnée pour commencer la discussion")
     
     if st.button("Connection"):
         with st.spinner("Connection à la base de donnée"):
