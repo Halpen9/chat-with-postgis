@@ -134,6 +134,25 @@ Résultat SQL : {response}"""
         "chat_history": chat_history,
 
     })
+def display_schema(db: SQLDatabase):
+    def get_schema(_):
+        return db.get_table_info()
+    template = """
+    Voici le schéma des tables de la base de données :
+    <SCHEMA>{schema}</SCHEMA>
+    Rédige une courte et concise présentation de cette base de données en français. Pas besoin d'exemples ou de détails techniques.
+    Présente la de façon claire, structurée et ergonomique.
+    Par exemple, noms des tables et colonnes avec une courte description en langage naturel.
+    """
+    prompt= ChatPromptTemplate.from_template(template)
+    llm= ChatOpenAI(model= "gpt-4o-mini")
+    return (
+        RunnablePassthrough.assign(schema=get_schema)
+        | prompt
+        | llm
+        | StrOutputParser()
+    )
+
 
 if "chat_history" not in st.session_state:
     st.session_state.chat_history = [
@@ -154,6 +173,8 @@ with st.sidebar:
             db=init_database(user,password,host,port,database)
             st.session_state.db=db
             st.success("Connecté à la base de donnée!")
+            st.markdown(display_schema(st.session_state.db).invoke({}))
+    
 
 
 for message in st.session_state.chat_history:
