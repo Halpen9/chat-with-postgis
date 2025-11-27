@@ -30,12 +30,6 @@ database = st.secrets["postgres"]["database"]
 client = Client()
 
 def init_database()-> SQLDatabase:
-    original_getaddrinfo = socket.getaddrinfo
-    def getaddrinfo_ipv4(hostname, port, *args, **kwargs):
-    # garder uniquement les adresses IPv4
-        return [info for info in original_getaddrinfo(hostname, port, *args, **kwargs) if info[0] == socket.AF_INET]
-
-    socket.getaddrinfo = getaddrinfo_ipv4
     #db_uri = f"mysql+mysqlconnector://{user}:{password}@{host}:{port}/{database}"
     db_uri = f"postgresql+psycopg2://{user}:{password}@{host}:{port}/{database}"
     return SQLDatabase.from_uri(db_uri)
