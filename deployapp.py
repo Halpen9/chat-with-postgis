@@ -19,11 +19,16 @@ os.environ["LANGCHAIN_PROJECT"] = st.secrets["LANGCHAIN_PROJECT"]
 # OPENAI
 os.environ["OPENAI_API_KEY"] = st.secrets["OPENAI_API_KEY"]
 
+host = st.secrets["postgres"]["host"]
+port = st.secrets["postgres"]["port"]
+user = st.secrets["postgres"]["user"]
+password = st.secrets["postgres"]["password"]
+database = st.secrets["postgres"]["database"]
 
 
 client = Client()
 
-def init_database(user: str, password: str, host: str, port: str, database: str)-> SQLDatabase:
+def init_database()-> SQLDatabase:
     #db_uri = f"mysql+mysqlconnector://{user}:{password}@{host}:{port}/{database}"
     db_uri = f"postgresql+psycopg2://{user}:{password}@{host}:{port}/{database}"
     return SQLDatabase.from_uri(db_uri)
@@ -162,20 +167,9 @@ st.title("Discute avec ta base de donnée")
 with st.sidebar:
     st.subheader("Paramètres")
     st.write("C'est une simple application de discussion utilisant SQL. Connectez vous à la base de donnée pour commencer la discussion")
-    st.text_input("Host", key="Host")
-    st.text_input("Port", key="Port")
-    st.text_input("User", key="User")
-    st.text_input("Password", type="password", key="Password")
-    st.text_input("Database", key="Database")
     if st.button("Connection"):
         with st.spinner("Connection à la base de donnée"):
-            db = init_database(
-                st.session_state["User"],
-                st.session_state["Password"],
-                st.session_state["Host"],
-                st.session_state["Port"],
-                st.session_state["Database"]
-            )
+            db = init_database()
             st.session_state.db=db
             st.success("Connecté à la base de donnée!")
             st.markdown(display_schema(st.session_state.db).invoke({}))
