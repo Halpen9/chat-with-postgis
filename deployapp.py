@@ -34,7 +34,7 @@ def init_database()-> SQLDatabase:
     db_uri = f"postgresql+psycopg2://{user}:{password}@{host}:{port}/{database}"
     return SQLDatabase.from_uri(db_uri)
 
-@traceable(name="SQL Query Generator")
+
 def get_sql_chain(db):
     template = """
 Tu es un data analyst travaillant pour une entreprise.
@@ -93,7 +93,7 @@ Requête SQL :
 
     )
     
-@traceable(name="SQL Response Generator")
+
 def get_response(user_query : str, db: SQLDatabase, chat_history: list):
     sql_chain = get_sql_chain(db)
 

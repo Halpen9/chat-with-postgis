@@ -26,14 +26,16 @@ os.environ["LANGCHAIN_TRACING_V2"] = os.getenv("LANGCHAIN_TRACING_V2", "true")
 os.environ["LANGCHAIN_API_KEY"] = os.getenv("LANGCHAIN_API_KEY")
 os.environ["LANGCHAIN_PROJECT"] = os.getenv("LANGCHAIN_PROJECT", "finalapp")
 
-client = Client()
+
+
+
 
 def init_database(user: str, password: str, host: str, port: str, database: str)-> SQLDatabase:
     #db_uri = f"mysql+mysqlconnector://{user}:{password}@{host}:{port}/{database}"
     db_uri = f"postgresql+psycopg2://{user}:{password}@{host}:{port}/{database}"
     return SQLDatabase.from_uri(db_uri)
 
-@traceable(name="SQL Query Generator")
+
 def get_sql_chain(db):
     template = """
 Tu es un data analyst travaillant pour une entreprise.
@@ -92,7 +94,7 @@ Requête SQL :
 
     )
     
-@traceable(name="SQL Response Generator")
+
 def get_response(user_query : str, db: SQLDatabase, chat_history: list):
     sql_chain = get_sql_chain(db)
 
@@ -158,6 +160,8 @@ if "chat_history" not in st.session_state:
     st.session_state.chat_history = [
         AIMessage(content="Bonjour! Je suis un assistant SQL. Demande moi ce que tu veux sur ta base de donnée")
     ]
+if "schema_display" not in st.session_state:
+    st.session_state.schema_display = None
 
 
 
@@ -173,7 +177,9 @@ with st.sidebar:
             db=init_database(user,password,host,port,database)
             st.session_state.db=db
             st.success("Connecté à la base de donnée!")
-            st.markdown(display_schema(st.session_state.db).invoke({}))
+            st.session_state.schema_display = display_schema(st.session_state.db).invoke({})
+    if st.session_state.schema_display:
+        st.markdown(st.session_state.schema_display)
     
 
 
