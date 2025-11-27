@@ -159,6 +159,8 @@ if "chat_history" not in st.session_state:
     st.session_state.chat_history = [
         AIMessage(content="Bonjour! Je suis un assistant SQL. Demande moi ce que tu veux sur ta base de donnée")
     ]
+if "schema_display" not in st.session_state:
+    st.session_state.schema_display = None
 
 
 
@@ -173,8 +175,9 @@ with st.sidebar:
             db = init_database()
             st.session_state.db=db
             st.success("Connecté à la base de donnée!")
-            st.markdown(display_schema(st.session_state.db).invoke({}))
-    
+            st.session_state.schema_display = display_schema(st.session_state.db).invoke({})
+    if st.session_state.schema_display:
+        st.markdown(st.session_state.schema_display)
 
 
 for message in st.session_state.chat_history:
