@@ -8,7 +8,7 @@ from langsmith import traceable,Client
 from langchain_groq import ChatGroq
 import streamlit as st
 import os
-import socket
+
 
 
 
@@ -157,24 +157,24 @@ def display_schema(db: SQLDatabase):
 
 if "chat_history" not in st.session_state:
     st.session_state.chat_history = [
-        AIMessage(content="Bonjour! Je suis un assistant SQL. Demande moi ce que tu veux sur ta base de donnée")
+        AIMessage(content="Bonjour! Je suis un assistant SQL. Demande moi ce que tu veux sur ta base de données")
     ]
 if "schema_display" not in st.session_state:
     st.session_state.schema_display = None
 
 
 
-st.set_page_config(page_title="Discute avec ta base de donnée", page_icon=":speech_balloon:")
-st.title("Discute avec ta base de donnée")
+st.set_page_config(page_title="Discute avec ta base de données", page_icon=":speech_balloon:")
+st.title("Discute avec ta base de données")
 
 with st.sidebar:
     st.subheader("Paramètres")
-    st.write("C'est une simple application de discussion utilisant SQL. Connectez vous à la base de donnée pour commencer la discussion")
+    st.write("C'est une simple application de discussion utilisant SQL. Connectez vous à la base de données pour commencer la discussion")
     if st.button("Connection"):
-        with st.spinner("Connection à la base de donnée"):
+        with st.spinner("Connection à la base de données..."):
             db = init_database()
             st.session_state.db=db
-            st.success("Connecté à la base de donnée!")
+            st.success("Connecté à la base de données!")
             st.session_state.schema_display = display_schema(st.session_state.db).invoke({})
     if st.session_state.schema_display:
         st.markdown(st.session_state.schema_display)
