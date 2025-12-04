@@ -129,37 +129,29 @@ def get_rep(user_query: str, chat_history: list):
     return reponsee.strip().lower()
 
 client = OpenAI(api_key=os.getenv("OPENAI_API_KEY"))
-def generate_graph_from_prompt(prompt, db):
+def generate_graph_from_prompt(prompt, db): #c'est bon normalement
     besoins =get_sql_chain(db)
     full_prompt = f"""
     Génère uniquement du code Python utilisant matplotlib, SANS texte autour. 
     LE CODE DOIT ÊTRE IMMÉDIATEMENT EXÉCUTABLE.
     Toute réponse doit être du code Python brut uniquement. Aucun texte, aucun Markdown, aucune balise ``` autorisée.
-
     IMPORTANT :
     - Tu dois impérativement utiliser SQLAlchemy pour exécuter la requête SQL retournée par {besoins}.
     - Interdiction ABSOLUE d utiliser sqlite3.
-    - La base de données est PostgreSQL, déjà configurée et accessible via la variable `db` passée dans l’environnement.
+    - La base de données est PostgreSQL, déjà configurée et accessible via la variable `db` passée dans l environnement.
     - Pour exécuter la requête : utilise db._engine (un engine SQLAlchemy valide).
-
     Utilise ce modèle :
     import pandas as pd
-
     df = pd.read_sql(query, db._engine)
-
     Ensuite génère le graphique avec matplotlib.
-
     Le graphique doit répondre à :
     {prompt}
-
     Règles :
     - Aucun texte hors code
     - Aucune balise Markdown
     - Aucune donnée inventée : tout provient de la base de données
     - Code immédiatement exécutable
-
     Utilise uniquement le schéma réel suivant (ne jamais inventer de colonnes ou tables) :
-
     {db.get_table_info()}
     """
     answer=client.responses.create(
@@ -167,40 +159,33 @@ def generate_graph_from_prompt(prompt, db):
         input=full_prompt
     )
     code = answer.output_text
-
     local_vars={}
+    exec(code,{"plt":plt,"io":io, "db":db}, local_vars)
+    buf=io.BytesIO()
+    plt.savefig(buf, format="png")
+    plt.close()
+    buf.seek(0)
+    img_base64 = base64.b64encode(buf.getvalue()).decode("utf-8")
+    img_base64_str = "data:image/png;base64," + img_base64
+    return img_base64_str
 
-    try:
-        exec(code,{"plt":plt,"io":io, "db":db}, local_vars)
-        buf=io.BytesIO()
-        plt.savefig(buf, format="png")
-        plt.close()
-        buf.seek(0)
-
-        img_base64 = base64.b64encode(buf.getvalue()).decode("utf-8")
-        img_base64_str = "data:image/png;base64," + img_base64
-        return img_base64_str
-    
-    except Exception as e:
-        print("Erreur dans le code généré :")
-        print(code)
-        print(traceback.format_exc())
-        return "Erreur : impossible de générer le graphique."
-
-def genere_titre(prompt): #donne pas un bon titre mais c'est une base
+def genere_titre(prompt,db): #c'est bon c'est validé
+    besoins =get_sql_chain(db)
     pprompt = f"""
     T'es un spécialiste dans le sujet de la base de données qu'on t'a fournis 
     et t'as besoins d'écrire un titre simple et concis pour un graphique basé sur le contenue de la demande suivante :
     {prompt}
+    Le titre doit être court, clair et pertinent par rapport à la demande et doive refléter le contenu du graphique basé sur: 
+    {besoins}
     """
     aanswer=client.responses.create(
         model="gpt-4o-mini", 
         input=pprompt
     )
     titre = aanswer.output_text  
-
     print("et pour le titre ?")
     return titre
+
 
 
 def get_response(user_query : str, db: SQLDatabase, chat_history: list):
