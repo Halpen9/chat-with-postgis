@@ -1,15 +1,22 @@
+from dotenv import load_dotenv
 from langchain_core.messages import AIMessage, HumanMessage
-from langchain_core.prompts import ChatPromptTemplate
-from langchain_community.utilities import SQLDatabase
 from langchain_core.runnables import RunnablePassthrough
+from langchain_community.utilities import SQLDatabase
+from langchain_core.prompts import ChatPromptTemplate 
 from langchain_core.output_parsers import StrOutputParser
 from langchain_openai import ChatOpenAI
-from langsmith import traceable,Client
 from langchain_groq import ChatGroq
-from datetime import datetime
+from openai import OpenAI
+from PIL import Image
+from langchain.schema import AIMessage
 
 import streamlit as st
 import os
+import matplotlib.pyplot as plt 
+import io
+import base64
+import traceback 
+import imghdr
 
 
 now = datetime.now()
@@ -105,6 +112,20 @@ Requête SQL :
 
     )
     
+def get_rep(user_query: str, chat_history: list):
+    prompt = """
+    Tu es un spécialiste dans le sujet de la base de donnée qui est à ta disposition. Analyse la demande utilisateur et réponds UNIQUEMENT par :
+    - "sql" si la question nécessite une requête SQL sur la base
+    - "image" si l'utilisateur veut une image, carte, schéma, visualisation
+    - "chat" pour toute réponse en langage naturel
+    Historique : {chat_history}
+    Question : {question}
+    Réponse :"""
+    llm = ChatOpenAI(model="gpt-4o-mini")
+    prompt = ChatPromptTemplate.from_template(prompt)
+    chain = prompt | llm | StrOutputParser()
+    reponsee = chain.invoke({"question": user_query, "chat_history": chat_history})
+    return reponsee.strip().lower()
 
 def get_response(user_query : str, db: SQLDatabase, chat_history: list):
     sql_chain = get_sql_chain(db)
@@ -148,6 +169,7 @@ Résultat SQL : {response}"""
         "current_date": now,
 
     })
+
 def display_schema(db: SQLDatabase):
     def get_schema(_):
         return db.get_table_info()
