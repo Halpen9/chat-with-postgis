@@ -290,7 +290,7 @@ for message in st.session_state.chat_history:
              if isinstance(message.content,str)and message.content.startswith("data:image/png;base64,"):
                 image_data = message.content.split(",")[1]
                 image = Image.open(io.BytesIO(base64.b64decode(image_data)))
-                st.image(image, caption="")
+                st.image(image, caption=genere_titre(image,db))
              else:
                 st.markdown(message.content)
     elif isinstance(message, HumanMessage):
@@ -307,7 +307,7 @@ if user_query is not None and user_query.strip() != "":
     with st.chat_message("AI"):
         response = get_response(user_query,st.session_state.db, st.session_state.chat_history)
         if response.startswith("data:image/png;base64,"):
-            st.image(response, caption="")
+            st.image(response, caption=genere_titre(response,db))
         else :
             st.markdown(response)
     st.session_state.chat_history.append(AIMessage(content=response))
