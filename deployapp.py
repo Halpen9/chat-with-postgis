@@ -115,7 +115,7 @@ def get_sql_chain(db):
 def get_rep(user_query: str, chat_history: list):
     prompt = """
     Tu es un spécialiste dans le sujet de la base de donnée qui est à ta disposition. Analyse la demande utilisateur et réponds UNIQUEMENT par :
-    - "sql" si la question nécessite une requête SQL sur la base
+    - "sql" si la question nécessite une requête SQL sur la base, c'est une base spatiale postgis.
     - "image" si l'utilisateur veut une image, carte, schéma, visualisation
     Historique : {chat_history}
     Question : {question}
