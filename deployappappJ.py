@@ -8,7 +8,6 @@ from langchain_openai import ChatOpenAI
 from langchain_groq import ChatGroq
 from openai import OpenAI
 from PIL import Image
-from langchain.schema import AIMessage
 from datetime import datetime
 from langsmith import traceable,Client
 
@@ -38,7 +37,7 @@ password = st.secrets["postgres"]["password"]
 database = st.secrets["postgres"]["database"]
 
 
-client = Client()
+#client = Client()
 
 def init_database()-> SQLDatabase:
     #db_uri = f"mysql+mysqlconnector://{user}:{password}@{host}:{port}/{database}"
@@ -48,57 +47,57 @@ def init_database()-> SQLDatabase:
 
 def get_sql_chain(db):
     template = """
-Tu es un data analyst travaillant pour une entreprise.
-Tu échanges avec un utilisateur qui te pose des questions sur la base de données spatial (postgis) de l'entreprise.
+    Tu es un data analyst travaillant pour une entreprise.
+    Tu échanges avec un utilisateur qui te pose des questions sur la base de données spatial (postgis) de l'entreprise.
 
-À partir du schéma des tables ci-dessous, écris une requête SQL qui permettrait de répondre à la question de l'utilisateur.
-Tiens également compte de l'historique de la conversation pour formuler ta réponse.
+    À partir du schéma des tables ci-dessous, écris une requête SQL qui permettrait de répondre à la question de l'utilisateur.
+    Tiens également compte de l'historique de la conversation pour formuler ta réponse.
 
-Si la question concerne la temporalité, la date actuelle est : {current_date}.
+    Si la question concerne la temporalité, la date actuelle est : {current_date}.
 
-⚠️ IMPORTANT — RÈGLES POUR SUPABASE :
-- N'utilise JAMAIS ST_DistanceSphere().
-- Pour calculer des distances réelles en mètres, utilise : 
-  ST_Distance(geom::geography, geom::geography)
-- Pour calculer un rayon autour d’un point, utilise aussi ST_Distance(...::geography).
-- Toujours caster les géométries en ::geography avant ST_Distance.
-- Toujours renvoyer une REQUÊTE SQL VALIDE SUPABASE.
+    ⚠️ IMPORTANT — RÈGLES POUR SUPABASE :
+    - N'utilise JAMAIS ST_DistanceSphere().
+    - Pour calculer des distances réelles en mètres, utilise : 
+    ST_Distance(geom::geography, geom::geography)
+    - Pour calculer un rayon autour d’un point, utilise aussi ST_Distance(...::geography).
+    - Toujours caster les géométries en ::geography avant ST_Distance.
+    - Toujours renvoyer une REQUÊTE SQL VALIDE SUPABASE.
 
-<SCHEMA>{schema}</SCHEMA>
+    <SCHEMA>{schema}</SCHEMA>
 
-Historique de la conversation : {chat_history}
+    Historique de la conversation : {chat_history}
 
-Rédige uniquement la requête SQL — sans aucun texte explicatif, sans commentaire et sans backticks.
+    Rédige uniquement la requête SQL — sans aucun texte explicatif, sans commentaire et sans backticks.
 
-Exemple :
-Question : Trouver les bureaux dans un rayon de 100 km autour de Paris ?
-Requête SQL : 
-SELECT o.name, c.name AS city
-FROM offices o
-JOIN cities c ON o.city_id = c.id
-WHERE ST_DistanceSphere(o.geom, ST_GeomFromText('POINT(2.3522 48.8566)', 4326)) < 100000;
+    Exemple :
+    Question : Trouver les bureaux dans un rayon de 100 km autour de Paris ?
+    Requête SQL : 
+    SELECT o.name, c.name AS city
+    FROM offices o
+    JOIN cities c ON o.city_id = c.id
+    WHERE ST_DistanceSphere(o.geom, ST_GeomFromText('POINT(2.3522 48.8566)', 4326)) < 100000;
 
 
-Question : Trouver les clients à moins de 50 km du bureau de Lyon.
-Requête SQL : 
-SELECT cl.name, cl.revenue
-FROM clients cl
-JOIN offices o ON cl.office_id = o.id
-WHERE o.name = 'Lyon Center'
-AND ST_DistanceSphere(cl.geom, o.geom) < 50000;
+    Question : Trouver les clients à moins de 50 km du bureau de Lyon.
+    Requête SQL : 
+    SELECT cl.name, cl.revenue
+    FROM clients cl
+    JOIN offices o ON cl.office_id = o.id
+    WHERE o.name = 'Lyon Center'
+    AND ST_DistanceSphere(cl.geom, o.geom) < 50000;
 
-Question : Calculer la distance entre Paris et Marseille.
-Requête SQL : 
-SELECT ST_DistanceSphere(
-    (SELECT geom FROM cities WHERE name = 'Paris'),
-    (SELECT geom FROM cities WHERE name = 'Marseille')
-) / 1000 AS distance_km;
+    Question : Calculer la distance entre Paris et Marseille.
+    Requête SQL : 
+    SELECT ST_DistanceSphere(
+        (SELECT geom FROM cities WHERE name = 'Paris'),
+        (SELECT geom FROM cities WHERE name = 'Marseille')
+    ) / 1000 AS distance_km;
 
-À ton tour :
+    À ton tour :
 
-Question : {question}
-Requête SQL :
-"""
+    Question : {question}
+    Requête SQL :
+    """
     prompt = ChatPromptTemplate.from_template(template)
 
     #llm = ChatGroq(model="llama-3.3-70b-versatile", temperature=0)
@@ -129,27 +128,111 @@ def get_rep(user_query: str, chat_history: list):
     reponsee = chain.invoke({"question": user_query, "chat_history": chat_history})
     return reponsee.strip().lower()
 
+client = OpenAI(api_key=os.getenv("OPENAI_API_KEY"))
+def generate_graph_from_prompt(prompt, db):
+    besoins =get_sql_chain(db)
+    full_prompt = f"""
+    Génère uniquement du code Python utilisant matplotlib, SANS texte autour. 
+    LE CODE DOIT ÊTRE IMMÉDIATEMENT EXÉCUTABLE.
+    Toute réponse doit être du code Python brut uniquement. Aucun texte, aucun Markdown, aucune balise ``` autorisée.
+
+    IMPORTANT :
+    - Tu dois impérativement utiliser SQLAlchemy pour exécuter la requête SQL retournée par {besoins}.
+    - Interdiction ABSOLUE d utiliser sqlite3.
+    - La base de données est PostgreSQL, déjà configurée et accessible via la variable `db` passée dans l’environnement.
+    - Pour exécuter la requête : utilise db._engine (un engine SQLAlchemy valide).
+
+    Utilise ce modèle :
+    import pandas as pd
+
+    df = pd.read_sql(query, db._engine)
+
+    Ensuite génère le graphique avec matplotlib.
+
+    Le graphique doit répondre à :
+    {prompt}
+
+    Règles :
+    - Aucun texte hors code
+    - Aucune balise Markdown
+    - Aucune donnée inventée : tout provient de la base de données
+    - Code immédiatement exécutable
+
+    Utilise uniquement le schéma réel suivant (ne jamais inventer de colonnes ou tables) :
+
+    {db.get_table_info()}
+    """
+    answer=client.responses.create(
+        model="gpt-4o-mini", 
+        input=full_prompt
+    )
+    code = answer.output_text
+
+    local_vars={}
+
+    try:
+        exec(code,{"plt":plt,"io":io, "db":db}, local_vars)
+        buf=io.BytesIO()
+        plt.savefig(buf, format="png")
+        plt.close()
+        buf.seek(0)
+
+        img_base64 = base64.b64encode(buf.getvalue()).decode("utf-8")
+        img_base64_str = "data:image/png;base64," + img_base64
+        return img_base64_str
+    
+    except Exception as e:
+        print("Erreur dans le code généré :")
+        print(code)
+        print(traceback.format_exc())
+        return "Erreur : impossible de générer le graphique."
+
+def genere_titre(prompt): #donne pas un bon titre mais c'est une base
+    pprompt = f"""
+    T'es un spécialiste dans le sujet de la base de données qu'on t'a fournis 
+    et t'as besoins d'écrire un titre simple et concis pour un graphique basé sur le contenue de la demande suivante :
+    {prompt}
+    """
+    aanswer=client.responses.create(
+        model="gpt-4o-mini", 
+        input=pprompt
+    )
+    titre = aanswer.output_text  
+
+    print("et pour le titre ?")
+    return titre
+
+
 def get_response(user_query : str, db: SQLDatabase, chat_history: list):
+    route = get_rep(user_query, chat_history)
+
+    if route == "image":
+       url = generate_graph_from_prompt(user_query,db)
+       return url
+
+    if route == "chat":
+        llm = ChatOpenAI(model="gpt-4o-mini")
+        return llm.invoke(user_query).content
     sql_chain = get_sql_chain(db)
 
     template = """
     Tu es un data analyst travaillant pour une entreprise.  
-Tu échanges avec un utilisateur qui te pose des questions sur la base de données spatial (postgis) de l'entreprise.
+    Tu échanges avec un utilisateur qui te pose des questions sur la base de données spatial (postgis) de l'entreprise.
 
-En te basant sur :
-- le schéma des tables ci-dessous,  
-- la question de l'utilisateur,  
-- la requête SQL générée,  
-- et le résultat de cette requête,  
+    En te basant sur :
+    - le schéma des tables ci-dessous,  
+    - la question de l'utilisateur,  
+    - la requête SQL générée,  
+    - et le résultat de cette requête,  
 
-rédige une **réponse claire et naturelle** en français, adaptée à l'utilisateur. Donne aussi la requete sql en fin de réponse.
+    rédige une **réponse claire et naturelle** en français, adaptée à l'utilisateur. Donne aussi la requete sql en fin de réponse.
 
-<SCHEMA>{schema}</SCHEMA>
+    <SCHEMA>{schema}</SCHEMA>
 
-Historique de la conversation : {chat_history}  
-Requête SQL : <SQL>{query}</SQL>  
-Question de l'utilisateur : {question}  
-Résultat SQL : {response}"""
+    Historique de la conversation : {chat_history}  
+    Requête SQL : <SQL>{query}</SQL>  
+    Question de l'utilisateur : {question}  
+    Résultat SQL : {response}"""
 
     prompt = ChatPromptTemplate.from_template(template)
 
@@ -201,7 +284,7 @@ if "schema_display" not in st.session_state:
 
 
 
-st.set_page_config(page_title="Discute avec ta base de données", page_icon=":speech_balloon:")
+st.set_page_config(page_title="Discute avec ta base de données", page_icon="💬")
 st.title("Discute avec ta base de données")
 
 with st.sidebar:
@@ -220,7 +303,12 @@ with st.sidebar:
 for message in st.session_state.chat_history:
     if isinstance(message, AIMessage):
         with st.chat_message("AI"):
-            st.markdown(message.content)
+             if isinstance(message.content,str)and message.content.startswith("data:image/png;base64,"):
+                image_data = message.content.split(",")[1]
+                image = Image.open(io.BytesIO(base64.b64decode(image_data)))
+                st.image(image, caption="")
+             else:
+                st.markdown(message.content)
     elif isinstance(message, HumanMessage):
         with st.chat_message("Humain"):
             st.markdown(message.content)
@@ -234,7 +322,9 @@ if user_query is not None and user_query.strip() != "":
     
     with st.chat_message("AI"):
         response = get_response(user_query,st.session_state.db, st.session_state.chat_history)
-        st.markdown(response)
-
+        if response.startswith("data:image/png;base64,"):
+            st.image(response, caption="")
+        else :
+            st.markdown(response)
     st.session_state.chat_history.append(AIMessage(content=response))
 
