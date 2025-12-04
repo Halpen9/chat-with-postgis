@@ -47,6 +47,14 @@ Tiens également compte de l'historique de la conversation pour formuler ta rép
 
 Si la question concerne la temporalité, la date actuelle est : {current_date}.
 
+⚠️ IMPORTANT — RÈGLES POUR SUPABASE :
+- N'utilise JAMAIS ST_DistanceSphere().
+- Pour calculer des distances réelles en mètres, utilise : 
+  ST_Distance(geom::geography, geom::geography)
+- Pour calculer un rayon autour d’un point, utilise aussi ST_Distance(...::geography).
+- Toujours caster les géométries en ::geography avant ST_Distance.
+- Toujours renvoyer une REQUÊTE SQL VALIDE SUPABASE.
+
 <SCHEMA>{schema}</SCHEMA>
 
 Historique de la conversation : {chat_history}
