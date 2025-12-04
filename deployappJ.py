@@ -294,7 +294,7 @@ for message in st.session_state.chat_history:
              else:
                 st.markdown(message.content)
     elif isinstance(message, HumanMessage):
-        with st.chat_message("Humain"):
+        with st.chat_message("Human"):
             st.markdown(message.content)
 
 user_query = st.chat_input("Ecrivez un message...")
