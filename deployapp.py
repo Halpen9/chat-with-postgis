@@ -6,11 +6,13 @@ from langchain_core.output_parsers import StrOutputParser
 from langchain_openai import ChatOpenAI
 from langsmith import traceable,Client
 from langchain_groq import ChatGroq
+from datetime import datetime
+
 import streamlit as st
 import os
 
 
-
+now = datetime.now()
 
 # LangChain
 os.environ["LANGCHAIN_TRACING_V2"] = st.secrets["LANGCHAIN_TRACING_V2"]
@@ -42,6 +44,8 @@ Tu échanges avec un utilisateur qui te pose des questions sur la base de donné
 
 À partir du schéma des tables ci-dessous, écris une requête SQL qui permettrait de répondre à la question de l'utilisateur.
 Tiens également compte de l'historique de la conversation pour formuler ta réponse.
+
+Si la question concerne la temporalité, la date actuelle est : {current_date}.
 
 <SCHEMA>{schema}</SCHEMA>
 
@@ -133,6 +137,7 @@ Résultat SQL : {response}"""
     return chain.invoke({
         "question": user_query,
         "chat_history": chat_history,
+        "current_date": now,
 
     })
 def display_schema(db: SQLDatabase):
