@@ -16,8 +16,7 @@ import os
 import matplotlib.pyplot as plt 
 import io
 import base64
-import traceback 
-import imghdr
+
 
 
 now = datetime.now()
