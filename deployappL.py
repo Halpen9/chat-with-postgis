@@ -8,9 +8,10 @@ from langchain_openai import ChatOpenAI
 from langchain_groq import ChatGroq
 from openai import OpenAI
 from PIL import Image
-from langchain.schema import AIMessage
 from datetime import datetime
 from langsmith import traceable,Client
+import folium
+from streamlit_folium import st_folium
 
 import streamlit as st
 import os
@@ -45,6 +46,8 @@ def init_database()-> SQLDatabase:
     db_uri = f"postgresql+psycopg2://{user}:{password}@{host}:{port}/{database}"
     return SQLDatabase.from_uri(db_uri)
 
+def get_schema(db):
+        return db.get_table_info()
 
 def get_sql_chain(db):
     template = """
@@ -60,7 +63,7 @@ Si la question concerne la temporalité, la date actuelle est : {current_date}.
 - N'utilise JAMAIS ST_DistanceSphere().
 - Pour calculer des distances réelles en mètres, utilise : 
   ST_Distance(geom::geography, geom::geography)
-- Pour calculer un rayon autour d’un point, utilise aussi ST_Distance(...::geography).
+- Pour calculer un rayon autour d'un point, utilise aussi ST_Distance(...::geography).
 - Toujours caster les géométries en ::geography avant ST_Distance.
 - Toujours renvoyer une REQUÊTE SQL VALIDE SUPABASE.
 
@@ -103,11 +106,9 @@ Requête SQL :
 
     #llm = ChatGroq(model="llama-3.3-70b-versatile", temperature=0)
     llm= ChatOpenAI(model= "gpt-4o-mini")
-    def get_schema(_):
-        return db.get_table_info()
     
     return (
-        RunnablePassthrough.assign(schema=get_schema)
+        RunnablePassthrough.assign(schema=get_schema(db))
         | prompt
         | llm
         | StrOutputParser()
@@ -118,7 +119,8 @@ def get_rep(user_query: str, chat_history: list):
     prompt = """
     Tu es un spécialiste dans le sujet de la base de donnée qui est à ta disposition. Analyse la demande utilisateur et réponds UNIQUEMENT par :
     - "sql" si la question nécessite une requête SQL sur la base
-    - "image" si l'utilisateur veut une image, carte, schéma, visualisation
+    - "image" si l'utilisateur veut une image, schéma, visualisation des données
+    - "map" si l'utilisateur veut une carte géographique
     - "chat" pour toute réponse en langage naturel
     Historique : {chat_history}
     Question : {question}
@@ -128,6 +130,47 @@ def get_rep(user_query: str, chat_history: list):
     chain = prompt | llm | StrOutputParser()
     reponsee = chain.invoke({"question": user_query, "chat_history": chat_history})
     return reponsee.strip().lower()
+
+def get_geojson_chain(db):
+    template = """
+Tu es un data analyst travaillant pour une entreprise.
+Ton but est de générer des requêtes SQL qui renvoient des données géographiques au format GeoJSON.
+Voici le schéma des tables de la base de données :
+<SCHEMA>{schema}</SCHEMA>
+Génere uniquement la requête SQL GeoJSON nécessaire pour répondre à la question de l'utilisateur.
+Exemple :
+Question : Je veux une carte des villes.
+Requête SQL :  
+SELECT json_build_object(
+    'type', 'FeatureCollection',
+    'features', json_agg(
+        json_build_object(
+            'type', 'Feature',
+            'geometry', ST_AsGeoJSON(c.geom)::json,
+            'properties', json_build_object(
+                'id', c.id,
+                'name', c.name,
+                'population', c.population
+            )
+        )
+    )
+) AS geojson
+FROM cities c;
+
+A ton tour :
+Question : {question}
+Requête SQL :
+    """
+    
+    prompt = ChatPromptTemplate.from_template(template)
+  
+    llm = ChatOpenAI(model="gpt-4-0125-preview")
+    return (
+        RunnablePassthrough.assign(schema=get_schema(db))
+        | prompt
+        | llm
+        | StrOutputParser()
+    )
 
 def get_response(user_query : str, db: SQLDatabase, chat_history: list):
     sql_chain = get_sql_chain(db)
@@ -173,8 +216,7 @@ Résultat SQL : {response}"""
     })
 
 def display_schema(db: SQLDatabase):
-    def get_schema(_):
-        return db.get_table_info()
+    
     template = """
     Voici le schéma des tables de la base de données :
     <SCHEMA>{schema}</SCHEMA>
@@ -185,7 +227,7 @@ def display_schema(db: SQLDatabase):
     prompt= ChatPromptTemplate.from_template(template)
     llm= ChatOpenAI(model= "gpt-4o-mini")
     return (
-        RunnablePassthrough.assign(schema=get_schema)
+        RunnablePassthrough.assign(schema=get_schema(db))
         | prompt
         | llm
         | StrOutputParser()
@@ -198,8 +240,8 @@ if "chat_history" not in st.session_state:
     ]
 if "schema_display" not in st.session_state:
     st.session_state.schema_display = None
-
-
+if "maps" not in st.session_state:
+    st.session_state.maps = None
 
 st.set_page_config(page_title="Discute avec ta base de données", page_icon=":speech_balloon:")
 st.title("Discute avec ta base de données")
