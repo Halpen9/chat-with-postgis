@@ -8,7 +8,6 @@ from langchain_openai import ChatOpenAI
 from langchain_groq import ChatGroq
 from openai import OpenAI
 from PIL import Image
-from langchain.schema import AIMessage
 from datetime import datetime
 from langsmith import traceable,Client
 
