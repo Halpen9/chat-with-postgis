@@ -361,7 +361,7 @@ if user_query is not None and user_query.strip() != "":
             m = folium.Map(location=[48.8566, 2.3522], zoom_start=5)  # Centré sur la France
             geojson_chain = get_geojson_chain(st.session_state.db)
             json_sql_query = geojson_chain.invoke({"question": user_query})
-            result = st.session_statedb.run(json_sql_query)
+            result = st.session_state.db.run(json_sql_query)
             geojson_data = json.loads(result)
             folium.GeoJson(geojson_data, name="geojson").add_to(m)
             st_folium(m, width=700, height=500)
