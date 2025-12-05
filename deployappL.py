@@ -12,6 +12,7 @@ from datetime import datetime
 from langsmith import traceable,Client
 import folium
 from streamlit_folium import st_folium
+import json
 
 import streamlit as st
 import os
@@ -243,6 +244,8 @@ def get_response(user_query : str, db: SQLDatabase, chat_history: list):
     })
 
 def get_geojson_chain(db):
+    def get_schema(_):
+        return db.get_table_info()
     template = """
 Tu es un data analyst travaillant pour une entreprise.
 Ton but est de générer des requêtes SQL qui renvoient des données géographiques au format GeoJSON.
@@ -277,7 +280,7 @@ Requête SQL :
   
     llm = ChatOpenAI(model="gpt-4-0125-preview")
     return (
-        RunnablePassthrough.assign(schema=db.get_table_info())
+        RunnablePassthrough.assign(schema=get_schema)
         | prompt
         | llm
         | StrOutputParser()
@@ -357,8 +360,10 @@ if user_query is not None and user_query.strip() != "":
             titre = genere_titre(user_query, st.session_state.db)
             m = folium.Map(location=[48.8566, 2.3522], zoom_start=5)  # Centré sur la France
             geojson_chain = get_geojson_chain(st.session_state.db)
-            geojson = geojson_chain.invoke({"question": user_query})
-            folium.GeoJson(geojson, name="geojson").add_to(m)
+            json_sql_query = geojson_chain.invoke({"question": user_query})
+            result = st.session_statedb.run(json_sql_query)
+            geojson_data = json.loads(result)
+            folium.GeoJson(geojson_data, name="geojson").add_to(m)
             st_folium(m, width=700, height=500)
             st.markdown(f"### {titre}")
         else :
