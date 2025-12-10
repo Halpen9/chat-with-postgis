@@ -163,7 +163,7 @@ def generate_graph_from_prompt(prompt, db): #c'est bon normalement
     img_base64_str = "data:image/png;base64," + img_base64
     return img_base64_str
 
-def generate_map_from_prompt(prompt, db):
+def generate_map_from_prompt(prompt, db): #je ne sais pas si c'est bon je n'ai pas encore teste
     besoins =get_sql_chain(db)
     map_prompt = f"""
     Génère uniquement du code Python utilisant matplotlib (AUCUN texte autour, AUCUN Markdown, AUCUNE balise).
