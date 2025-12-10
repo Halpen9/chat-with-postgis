@@ -10,6 +10,8 @@ from openai import OpenAI
 from PIL import Image
 from datetime import datetime
 from langsmith import traceable,Client
+import folium
+from streamlit_folium import st_folium
 
 import streamlit as st
 import os
@@ -58,7 +60,7 @@ def get_sql_chain(db):
     - N'utilise JAMAIS ST_DistanceSphere().
     - Pour calculer des distances réelles en mètres, utilise : 
     ST_Distance(geom::geography, geom::geography)
-    - Pour calculer un rayon autour d’un point, utilise aussi ST_Distance(...::geography).
+    - Pour calculer un rayon autour d'un point, utilise aussi ST_Distance(...::geography).
     - Toujours caster les géométries en ::geography avant ST_Distance.
     - Toujours renvoyer une REQUÊTE SQL VALIDE SUPABASE.
 
