@@ -317,6 +317,8 @@ if "chat_history" not in st.session_state:
     ]
 if "schema_display" not in st.session_state:
     st.session_state.schema_display = None
+if "maps_data" not in st.session_state:
+    st.session_state.maps_data = {}
 
 
 
@@ -339,11 +341,34 @@ with st.sidebar:
 for message in st.session_state.chat_history:
     if isinstance(message, AIMessage):
         with st.chat_message("AI"):
-             if isinstance(message.content,str)and message.content.startswith("data:image/png;base64,"):
+            if isinstance(message.content,str)and message.content.startswith("data:image/png;base64,"):
                 image_data = message.content.split(",")[1]
                 image = Image.open(io.BytesIO(base64.b64decode(image_data)))
                 st.image(image, caption="")
-             else:
+            # Si c'est une carte stockée
+            elif isinstance(message.content, dict) and message.content.get("type") == "stored_map":
+                map_id = message.content.get("map_id")
+                if map_id in st.session_state.maps_data:
+                    map_data = st.session_state.maps_data[map_id]
+                    
+                    # Recréer la carte avec les données stockées
+                    m = folium.Map(location=[46.603354, 1.888334], zoom_start=6)
+                    folium.GeoJson(
+                        map_data["geojson"],
+                        name="geojson",
+                        tooltip=folium.GeoJsonTooltip(
+                            fields=['name'] if 'features' in map_data["geojson"] and len(map_data["geojson"].get('features', [])) > 0 else [],
+                            aliases=['Nom:'],
+                            localize=True
+                        )
+                    ).add_to(m)
+                    
+                    st_folium(m, width=700, height=500, key=f"map_{map_id}")
+                    st.markdown(f"### {map_data['titre']}")
+                else:
+                    st.markdown(f"### {message.content.get('titre', 'Carte')}")
+                    st.info("(Carte non disponible)")
+            else:
                 st.markdown(message.content)
     elif isinstance(message, HumanMessage):
         with st.chat_message("Human"):
@@ -456,8 +481,16 @@ if user_query is not None and user_query.strip() != "":
                 # Afficher la carte
                 st_folium(m, width=700, height=500)
                 st.markdown(f"### {titre}")
+
+                # IMPORTANT : Stocker les données de la carte pour pouvoir la réafficher
+                map_id = len(st.session_state.chat_history)
+                st.session_state.maps_data[map_id] = {
+                    "geojson": geojson_data,
+                    "titre": titre
+                }
                 
-                response = f"Carte générée : {titre}"
+                # Créer un objet de réponse spécial pour les cartes
+                response = {"type": "stored_map", "map_id": map_id, "titre": titre}
                 
             except json.JSONDecodeError as e:
                 st.error(f"❌ Erreur de parsing JSON à la position {e.pos}")
