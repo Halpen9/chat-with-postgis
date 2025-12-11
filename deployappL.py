@@ -285,7 +285,7 @@ Requête SQL :
     llm = ChatOpenAI(model="gpt-4o-mini", temperature=0)
     
     return (
-        RunnablePassthrough.assign(schema=get_schema, requete_sql=lambda _: get_sql_chain(db).invoke({"question": "{question}", "chat_history": "{chat_history}"}))
+        RunnablePassthrough.assign(schema=get_schema, requete_sql=lambda _: get_sql_chain(db).invoke({"question": "{question}", "chat_history": "{chat_history}","current_date": now}))
         | prompt
         | llm
         | StrOutputParser()
