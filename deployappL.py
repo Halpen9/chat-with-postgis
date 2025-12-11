@@ -256,6 +256,7 @@ IMPORTANT :
 - Rédige UNIQUEMENT la requête SQL, SANS backticks
 - La requête doit retourner UNE SEULE colonne nommée 'geojson'
 - Utilise json_build_object et json_agg pour construire le GeoJSON
+- Fait attention au prefixe pour éviter les AmbiguousColumn sur 'geom'
 
 Utilise cette requete SQL si les données doivent être selectionnées :
 {requete_sql}
@@ -316,18 +317,7 @@ def clean_sql_query(query: str) -> str:
     return query
 import re
 
-def prefix_geom_alias(query: str) -> str:
-    """
-    Si la requête contient un FROM <table> <alias>, préfixe les occurrences
-    non qualifiées de `geom` par <alias>.geom pour éviter les AmbiguousColumn.
-    Ne touche pas aux geom déjà qualifiés (ex: o.geom).
-    """
-    m = re.search(r"FROM\s+([a-zA-Z_][\w]*)\s+([a-zA-Z_][\w]*)", query, flags=re.IGNORECASE)
-    if not m:
-        return query
-    alias = m.group(2)
-    # Remplace uniquement les mots 'geom' qui ne sont pas déjà préfixés par quelque chose + dot.
-    return re.sub(r"(?<![\.\w])\bgeom\b", f"{alias}.geom", query)
+
 
 
 if "chat_history" not in st.session_state:
@@ -425,7 +415,7 @@ if user_query is not None and user_query.strip() != "":
                 geojson_chain = get_geojson_chain(st.session_state.db)
                 json_sql_query = geojson_chain.invoke({"question": user_query, "chat_history": st.session_state.chat_history})
                 json_sql_query = clean_sql_query(json_sql_query)
-                json_sql_query = prefix_geom_alias(json_sql_query)
+                
                 
                 # Debug : afficher la requête
                 with st.expander("🔍 Voir la requête SQL générée"):
