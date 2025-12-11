@@ -257,6 +257,11 @@ IMPORTANT :
 - La requête doit retourner UNE SEULE colonne nommée 'geojson'
 - Utilise json_build_object et json_agg pour construire le GeoJSON
 
+Utilise cette requete SQL si les données doivent être selectionnées :
+{requete_sql}
+Base toi sur l'hitorique de la conversation pour formuler ta réponse:
+{chat_history}
+
 Schéma : <SCHEMA>{schema}</SCHEMA>
 
 Modèle à suivre EXACTEMENT :
@@ -280,7 +285,7 @@ Requête SQL :
     llm = ChatOpenAI(model="gpt-4o-mini", temperature=0)
     
     return (
-        RunnablePassthrough.assign(schema=get_schema)
+        RunnablePassthrough.assign(schema=get_schema, requete_sql=lambda _: get_sql_chain(db).invoke({"question": "{question}", "chat_history": "{chat_history}"}))
         | prompt
         | llm
         | StrOutputParser()
@@ -404,7 +409,7 @@ if user_query is not None and user_query.strip() != "":
                 
                 # Générer et nettoyer la requête SQL
                 geojson_chain = get_geojson_chain(st.session_state.db)
-                json_sql_query = geojson_chain.invoke({"question": user_query})
+                json_sql_query = geojson_chain.invoke({"question": user_query, "chat_history": st.session_state.chat_history})
                 json_sql_query = clean_sql_query(json_sql_query)
                 
                 # Debug : afficher la requête
