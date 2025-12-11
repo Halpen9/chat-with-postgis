@@ -166,7 +166,7 @@ def generate_graph_from_prompt(prompt, db): #c'est bon normalement
 
 def genere_titre(prompt,db): #c'est bon c'est validé
     besoins =get_sql_chain(db)
-    pprompt = f"""
+    titre_prompt = f"""
     T'es un spécialiste dans le sujet de la base de données qu'on t'a fournis 
     et t'as besoins d'écrire un titre simple et concis pour un graphique basé sur le contenue de la demande suivante :
     {prompt}
@@ -175,7 +175,7 @@ def genere_titre(prompt,db): #c'est bon c'est validé
     """
     aanswer=client.responses.create(
         model="gpt-4o-mini", 
-        input=pprompt
+        input=titre_prompt
     )
     titre = aanswer.output_text  
     print("et pour le titre ?")
