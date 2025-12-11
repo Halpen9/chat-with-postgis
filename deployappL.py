@@ -250,36 +250,105 @@ def get_geojson_chain(db):
     
     template = """
 Tu es un data analyst travaillant pour une entreprise.
-Génère une requête SQL qui renvoie des données au format GeoJSON.
+Génère une requête SQL qui renvoie des données au format GeoJSON en utilisant EXACTEMENT les colonnes du schéma fourni.
 
-IMPORTANT : 
-- Rédige UNIQUEMENT la requête SQL, SANS backticks
-- La requête doit retourner UNE SEULE colonne nommée 'geojson'
-- Utilise json_build_object et json_agg pour construire le GeoJSON
-- Fait attention au prefixe pour éviter les AmbiguousColumn sur 'geom'
+RÈGLES CRITIQUES :
+1. Rédige UNIQUEMENT la requête SQL, SANS backticks
+2. La requête doit retourner UNE SEULE colonne nommée 'geojson'
+3. Utilise json_build_object et json_agg pour construire le GeoJSON
+4. IMPORTANT : Utilise UNIQUEMENT les colonnes qui existent dans le schéma ci-dessous
+5. N'invente JAMAIS de colonnes (comme 'name' ou 'population') qui ne sont pas dans le schéma
+6. Pour la géométrie, utilise la colonne qui contient 'geom' ou similaire
+7. Pour les properties, inclus TOUTES les colonnes non-géométriques de la table
 
-Utilise cette requete SQL si les données doivent être selectionnées :
-{requete_sql}
-Base toi sur l'hitorique de la conversation pour formuler ta réponse:
-{chat_history}
+Schéma de la base de données :
+<SCHEMA>{schema}</SCHEMA>
 
-Schéma : <SCHEMA>{schema}</SCHEMA>
-Utilise bien les noms des colonnes utilisés dans le schéma, et non celles des exemples.
+Historique de la conversation : {chat_history}
 
-Modèle à suivre EXACTEMENT :
+ÉTAPES À SUIVRE :
+1. Identifie la table concernée par la question
+2. Repère la colonne de géométrie (généralement 'geom', 'geometry', 'location', etc.)
+3. Identifie TOUTES les autres colonnes de cette table (ce seront les properties)
+4. Si la requête SQL passée filtre certaines lignes, applique le même filtre
+
+Requête SQL de base (pour filtrage si nécessaire) : {requete_sql}
+
+TEMPLATE DE RÉPONSE (à adapter avec les VRAIES colonnes) :
 SELECT json_build_object(
     'type', 'FeatureCollection',
     'features', json_agg(
         json_build_object(
             'type', 'Feature',
-            'geometry', ST_AsGeoJSON(nom_de_la_colonne_géographique)::json,
-            'properties', json_build_object('name', name)
+            'geometry', ST_AsGeoJSON([nom_colonne_géométrie])::json,
+            'properties', json_build_object(
+                '[colonne1]', [colonne1],
+                '[colonne2]', [colonne2],
+                '[colonne3]', [colonne3]
+                -- Liste TOUTES les colonnes non-géométriques ici
+            )
         )
     )
 ) AS geojson
-FROM nom_table;
+FROM [nom_table];
 
-Question : {question}
+EXEMPLES CONCRETS :
+
+Exemple 1 - Si la table 'cities' a les colonnes : id, name, population, geom
+SELECT json_build_object(
+    'type', 'FeatureCollection',
+    'features', json_agg(
+        json_build_object(
+            'type', 'Feature',
+            'geometry', ST_AsGeoJSON(geom)::json,
+            'properties', json_build_object(
+                'id', id,
+                'name', name,
+                'population', population
+            )
+        )
+    )
+) AS geojson
+FROM cities;
+
+Exemple 2 - Si la table 'deliveries' a les colonnes : id, delivered_at, status, location
+SELECT json_build_object(
+    'type', 'FeatureCollection',
+    'features', json_agg(
+        json_build_object(
+            'type', 'Feature',
+            'geometry', ST_AsGeoJSON(location)::json,
+            'properties', json_build_object(
+                'id', id,
+                'delivered_at', delivered_at,
+                'status', status
+            )
+        )
+    )
+) AS geojson
+FROM deliveries;
+
+Exemple 3 - Si besoin de filtrer (ex: seulement les livraisons livrées)
+SELECT json_build_object(
+    'type', 'FeatureCollection',
+    'features', json_agg(
+        json_build_object(
+            'type', 'Feature',
+            'geometry', ST_AsGeoJSON(location)::json,
+            'properties', json_build_object(
+                'id', id,
+                'delivered_at', delivered_at,
+                'status', status
+            )
+        )
+    )
+) AS geojson
+FROM deliveries
+WHERE status = 'delivered';
+
+À TON TOUR - Question de l'utilisateur : {question}
+
+RAPPEL FINAL : Utilise UNIQUEMENT les colonnes qui existent réellement dans le schéma fourni !
 Requête SQL :
 """
     
@@ -303,6 +372,7 @@ def display_schema(db: SQLDatabase):
     Rédige une courte et concise présentation de cette base de données en français. Pas besoin d'exemples ou de détails techniques.
     Présente la de façon claire, structurée et ergonomique.
     Par exemple, noms des tables et colonnes avec une courte description en langage naturel.
+    C'est une base de données spatiale PostGIS, prends bien en comptes les colonnes géographiques.
     """
     prompt= ChatPromptTemplate.from_template(template)
     llm= ChatOpenAI(model= "gpt-4o-mini")
@@ -313,7 +383,7 @@ def display_schema(db: SQLDatabase):
         | StrOutputParser()
     )
 def clean_sql_query(query: str) -> str:
-    """Nettoie la requête SQL en retirant les backticks et espaces superflus"""
+    #Nettoie la requête SQL en retirant les backticks et espaces superflus
     query = query.replace("```sql", "").replace("```", "").strip()
     return query
 
