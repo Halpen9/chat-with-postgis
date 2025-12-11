@@ -385,38 +385,55 @@ if user_query is not None and user_query.strip() != "":
                     st.write(f"**Type:** `{type(result)}`")
                     st.write(f"**Contenu:** `{repr(result)}`")
                 
-                # Parser le résultat selon son type
-                if isinstance(result, str):
-                    # Nettoyer les espaces et caractères invisibles
-                    result = result.strip()
-                    st.write(f"Résultat (string) : `{result[:100]}...`")
-                    geojson_data = json.loads(result)
+                # Parser le résultat
+                try:
+                    import ast
                     
-                elif isinstance(result, list):
-                    if len(result) > 0:
-                        first_item = result[0]
-                        st.write(f"Premier élément type: `{type(first_item)}`")
+                    # Cas 1 : C'est une string représentant une structure Python
+                    if isinstance(result, str):
+                        result = result.strip()
                         
-                        if isinstance(first_item, tuple):
-                            geojson_str = first_item[0]
-                            st.write(f"Tuple content: `{repr(geojson_str)[:200]}...`")
+                        # Si ça ressemble à une structure Python (commence par [( ou [{)
+                        if result.startswith("[") or result.startswith("("):
+                            python_obj = ast.literal_eval(result)
+                            
+                            # Extraire le GeoJSON de la structure
+                            if isinstance(python_obj, list) and len(python_obj) > 0:
+                                if isinstance(python_obj[0], tuple):
+                                    geojson_data = python_obj[0][0]
+                                else:
+                                    geojson_data = python_obj[0]
+                            else:
+                                geojson_data = python_obj
                         else:
-                            geojson_str = first_item
-                        
-                        # Parser selon le type
-                        if isinstance(geojson_str, str):
-                            geojson_data = json.loads(geojson_str)
-                        elif isinstance(geojson_str, dict):
-                            geojson_data = geojson_str
+                            # Sinon c'est du JSON pur
+                            geojson_data = json.loads(result)
+                    
+                    # Cas 2 : C'est déjà une liste Python
+                    elif isinstance(result, list):
+                        if len(result) > 0:
+                            if isinstance(result[0], tuple):
+                                geojson_data = result[0][0]
+                            else:
+                                geojson_data = result[0]
                         else:
-                            raise ValueError(f"Type inattendu dans le résultat: {type(geojson_str)}")
+                            raise ValueError("Aucune donnée retournée")
+                    
+                    # Cas 3 : C'est déjà un dict
+                    elif isinstance(result, dict):
+                        geojson_data = result
+                    
                     else:
-                        raise ValueError("La requête n'a retourné aucune donnée")
+                        raise ValueError(f"Type non supporté: {type(result)}")
+                    
+                    # Vérifier que c'est bien un dict
+                    if not isinstance(geojson_data, dict):
+                        st.error(f"Le résultat n'est pas un dictionnaire: {type(geojson_data)}")
+                        raise ValueError(f"Format invalide: {type(geojson_data)}")
                         
-                elif isinstance(result, dict):
-                    geojson_data = result
-                else:
-                    raise ValueError(f"Type de résultat non supporté: {type(result)}")
+                except Exception as parse_error:
+                    st.error(f"Erreur lors du parsing: {str(parse_error)}")
+                    raise
                 
                 # Vérifier la structure du GeoJSON
                 with st.expander("🔍 Voir le GeoJSON parsé"):
