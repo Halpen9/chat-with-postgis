@@ -192,9 +192,10 @@ def genere_titre(prompt,db): #c'est bon c'est validé
 
 def get_response(user_query : str, db: SQLDatabase, chat_history: list):
     route = get_rep(user_query, chat_history)
+    
     if route == "map":
-        return "map"
-
+        return {"type": "map", "query": user_query}
+    
     if route == "image":
        url = generate_graph_from_prompt(user_query,db)
        return url
@@ -304,6 +305,10 @@ def display_schema(db: SQLDatabase):
         | llm
         | StrOutputParser()
     )
+def clean_sql_query(query: str) -> str:
+    """Nettoie la requête SQL en retirant les backticks et espaces superflus"""
+    query = query.replace("```sql", "").replace("```", "").strip()
+    return query
 
 
 if "chat_history" not in st.session_state:
@@ -353,27 +358,106 @@ if user_query is not None and user_query.strip() != "":
     
     with st.chat_message("AI"):
         response = get_response(user_query,st.session_state.db, st.session_state.chat_history)
-        if response.startswith("data:image/png;base64,"):
+        
+        # Gestion des images
+        if isinstance(response, str) and response.startswith("data:image/png;base64,"):
             st.image(response, caption="")
-        elif response == "map":
-            titre = genere_titre(user_query, st.session_state.db)
-            m = folium.Map(location=[48.8566, 2.3522], zoom_start=5)  # Centré sur la France
-            geojson_chain = get_geojson_chain(st.session_state.db)
-            json_sql_query = geojson_chain.invoke({"question": user_query})
-            result = st.session_state.db.run(json_sql_query)
-            geojson_data = json.loads(result)
-            folium.GeoJson(
-            geojson_data,
-            name="geojson",
-            tooltip=folium.GeoJsonTooltip(
-                fields=['name'],
-                aliases=['Nom:'],
-                localize=True
-            )
-        ).add_to(m)
-            st_folium(m, width=700, height=500)
-            st.markdown(f"### {titre}")
-        else :
+        
+        # Gestion des cartes
+        elif isinstance(response, dict) and response.get("type") == "map":
+            try:
+                titre = genere_titre(user_query, st.session_state.db)
+                
+                # Générer et nettoyer la requête SQL
+                geojson_chain = get_geojson_chain(st.session_state.db)
+                json_sql_query = geojson_chain.invoke({"question": user_query})
+                json_sql_query = clean_sql_query(json_sql_query)
+                
+                # Debug : afficher la requête
+                with st.expander("🔍 Voir la requête SQL générée"):
+                    st.code(json_sql_query, language="sql")
+                
+                # Exécuter la requête
+                result = st.session_state.db.run(json_sql_query)
+                
+                # Debug : afficher le résultat brut
+                with st.expander("🔍 Voir le résultat brut de la base"):
+                    st.write(f"**Type:** `{type(result)}`")
+                    st.write(f"**Contenu:** `{repr(result)}`")
+                
+                # Parser le résultat selon son type
+                if isinstance(result, str):
+                    # Nettoyer les espaces et caractères invisibles
+                    result = result.strip()
+                    st.write(f"Résultat (string) : `{result[:100]}...`")
+                    geojson_data = json.loads(result)
+                    
+                elif isinstance(result, list):
+                    if len(result) > 0:
+                        first_item = result[0]
+                        st.write(f"Premier élément type: `{type(first_item)}`")
+                        
+                        if isinstance(first_item, tuple):
+                            geojson_str = first_item[0]
+                            st.write(f"Tuple content: `{repr(geojson_str)[:200]}...`")
+                        else:
+                            geojson_str = first_item
+                        
+                        # Parser selon le type
+                        if isinstance(geojson_str, str):
+                            geojson_data = json.loads(geojson_str)
+                        elif isinstance(geojson_str, dict):
+                            geojson_data = geojson_str
+                        else:
+                            raise ValueError(f"Type inattendu dans le résultat: {type(geojson_str)}")
+                    else:
+                        raise ValueError("La requête n'a retourné aucune donnée")
+                        
+                elif isinstance(result, dict):
+                    geojson_data = result
+                else:
+                    raise ValueError(f"Type de résultat non supporté: {type(result)}")
+                
+                # Vérifier la structure du GeoJSON
+                with st.expander("🔍 Voir le GeoJSON parsé"):
+                    st.json(geojson_data)
+                
+                # Créer la carte
+                m = folium.Map(location=[46.603354, 1.888334], zoom_start=6)
+                
+                # Ajouter le GeoJSON
+                folium.GeoJson(
+                    geojson_data,
+                    name="geojson",
+                    tooltip=folium.GeoJsonTooltip(
+                        fields=['name'] if 'features' in geojson_data and len(geojson_data.get('features', [])) > 0 else [],
+                        aliases=['Nom:'],
+                        localize=True
+                    )
+                ).add_to(m)
+                
+                # Afficher la carte
+                st_folium(m, width=700, height=500)
+                st.markdown(f"### {titre}")
+                
+                response = f"Carte générée : {titre}"
+                
+            except json.JSONDecodeError as e:
+                st.error(f"❌ Erreur de parsing JSON à la position {e.pos}")
+                st.write(f"**Message d'erreur:** {str(e)}")
+                if 'result' in locals():
+                    st.write(f"**Résultat brut:** `{repr(result)[:500]}`")
+                response = "Erreur : Le résultat de la base n'est pas un JSON valide"
+                
+            except Exception as e:
+                st.error(f"❌ Erreur : {str(e)}")
+                import traceback
+                with st.expander("Voir le détail de l'erreur"):
+                    st.code(traceback.format_exc())
+                response = f"Erreur lors de la génération de la carte"
+        
+        # Réponse textuelle normale
+        else:
             st.markdown(response)
     st.session_state.chat_history.append(AIMessage(content=response))
 
