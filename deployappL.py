@@ -339,19 +339,24 @@ with st.sidebar:
 
 
 for message in st.session_state.chat_history:
+    # Normaliser le contenu : si c'est [dict], prendre le dict à l'indice 0
+    raw = message.content
+    content = raw
+    if isinstance(raw, list) and len(raw) > 0 and isinstance(raw[0], dict):
+        content = raw[0]
     if isinstance(message, AIMessage):
         with st.chat_message("AI"):
-            if isinstance(message.content,str)and message.content.startswith("data:image/png;base64,"):
-                image_data = message.content.split(",")[1]
+            if isinstance(content,str)and content.startswith("data:image/png;base64,"):
+                image_data = content.split(",")[1]
                 image = Image.open(io.BytesIO(base64.b64decode(image_data)))
                 st.image(image, caption="")
             # Si c'est une carte stockée
             # Si c'est une carte stockée (content peut être dict ou [dict])
-            elif (isinstance(message.content, dict) and message.content.get("type") == "stored_map") or (
-                isinstance(message.content, list) and len(message.content) > 0 and isinstance(message.content[0], dict) and message.content[0].get("type") == "stored_map"
+            elif (isinstance(content, dict) and content.get("type") == "stored_map") or (
+                isinstance(content, list) and len(content) > 0 and isinstance(content[0], dict) and content[0].get("type") == "stored_map"
             ):
-                content = message.content[0] if isinstance(message.content, list) else message.content
-                map_id = message.content.get("map_id")
+                content = content[0] if isinstance(content, list) else content
+                map_id = content.get("map_id")
                 if map_id in st.session_state.maps_data:
                     map_data = st.session_state.maps_data[map_id]
                     
@@ -370,10 +375,10 @@ for message in st.session_state.chat_history:
                     st_folium(m, width=700, height=500, key=f"map_{map_id}")
                     st.markdown(f"### {map_data['titre']}")
                 else:
-                    st.markdown(f"### {message.content.get('titre', 'Carte')}")
+                    st.markdown(f"### {content.get('titre', 'Carte')}")
                     st.info("(Carte non disponible)")
             else:
-                st.markdown(message.content)
+                st.markdown(content)
     elif isinstance(message, HumanMessage):
         with st.chat_message("Human"):
             st.markdown(message.content)
