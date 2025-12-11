@@ -46,7 +46,7 @@ def init_database()-> SQLDatabase:
     db_uri = f"postgresql+psycopg2://{user}:{password}@{host}:{port}/{database}"
     return SQLDatabase.from_uri(db_uri)
 
-
+print (st.session_state.db.get_table_info())
 def get_sql_chain(db):
     template = """
     Tu es un data analyst travaillant pour une entreprise.
