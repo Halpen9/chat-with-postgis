@@ -346,7 +346,11 @@ for message in st.session_state.chat_history:
                 image = Image.open(io.BytesIO(base64.b64decode(image_data)))
                 st.image(image, caption="")
             # Si c'est une carte stockée
-            elif isinstance(message.content, dict) and message.content.get("type") == "stored_map":
+            # Si c'est une carte stockée (content peut être dict ou [dict])
+            elif (isinstance(message.content, dict) and message.content.get("type") == "stored_map") or (
+                isinstance(message.content, list) and len(message.content) > 0 and isinstance(message.content[0], dict) and message.content[0].get("type") == "stored_map"
+            ):
+                content = message.content[0] if isinstance(message.content, list) else message.content
                 map_id = message.content.get("map_id")
                 if map_id in st.session_state.maps_data:
                     map_data = st.session_state.maps_data[map_id]
@@ -509,5 +513,8 @@ if user_query is not None and user_query.strip() != "":
         # Réponse textuelle normale
         else:
             st.markdown(response)
-    st.session_state.chat_history.append(AIMessage(content=response))
+    if isinstance(response, dict):
+        st.session_state.chat_history.append(AIMessage(content=[response]))
+    else:
+        st.session_state.chat_history.append(AIMessage(content=response))
 
