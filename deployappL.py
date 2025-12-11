@@ -246,40 +246,38 @@ def get_response(user_query : str, db: SQLDatabase, chat_history: list):
 def get_geojson_chain(db):
     def get_schema(_):
         return db.get_table_info()
+    
     template = """
 Tu es un data analyst travaillant pour une entreprise.
-Ton but est de générer des requêtes SQL qui renvoient des données géographiques au format GeoJSON.
-Voici le schéma des tables de la base de données :
-<SCHEMA>{schema}</SCHEMA>
-IMPORTANT : Rédige UNIQUEMENT la requête SQL GeoJSON, SANS aucun texte explicatif, SANS commentaire et SANS backticks markdown (```).
-Génere uniquement la requête SQL GeoJSON nécessaire pour répondre à la question de l'utilisateur.
-Exemple :
-Question : Je veux une carte des villes.
-Requête SQL :  
+Génère une requête SQL qui renvoie des données au format GeoJSON.
+
+IMPORTANT : 
+- Rédige UNIQUEMENT la requête SQL, SANS backticks
+- La requête doit retourner UNE SEULE colonne nommée 'geojson'
+- Utilise json_build_object et json_agg pour construire le GeoJSON
+
+Schéma : <SCHEMA>{schema}</SCHEMA>
+
+Modèle à suivre EXACTEMENT :
 SELECT json_build_object(
     'type', 'FeatureCollection',
     'features', json_agg(
         json_build_object(
             'type', 'Feature',
-            'geometry', ST_AsGeoJSON(c.geom)::json,
-            'properties', json_build_object(
-                'id', c.id,
-                'name', c.name,
-                'population', c.population
-            )
+            'geometry', ST_AsGeoJSON(geom)::json,
+            'properties', json_build_object('name', name)
         )
     )
 ) AS geojson
-FROM cities c;
+FROM nom_table;
 
-A ton tour :
 Question : {question}
 Requête SQL :
-    """
+"""
     
     prompt = ChatPromptTemplate.from_template(template)
-  
-    llm = ChatOpenAI(model="gpt-4-0125-preview")
+    llm = ChatOpenAI(model="gpt-4o-mini", temperature=0)
+    
     return (
         RunnablePassthrough.assign(schema=get_schema)
         | prompt
@@ -364,7 +362,15 @@ if user_query is not None and user_query.strip() != "":
             json_sql_query = geojson_chain.invoke({"question": user_query})
             result = st.session_state.db.run(json_sql_query)
             geojson_data = json.loads(result)
-            folium.GeoJson(geojson_data, name="geojson").add_to(m)
+            folium.GeoJson(
+            geojson_data,
+            name="geojson",
+            tooltip=folium.GeoJsonTooltip(
+                fields=['name'],
+                aliases=['Nom:'],
+                localize=True
+            )
+        ).add_to(m)
             st_folium(m, width=700, height=500)
             st.markdown(f"### {titre}")
         else :
