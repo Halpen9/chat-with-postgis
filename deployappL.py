@@ -66,7 +66,7 @@ def get_sql_chain(db):
     - Toujours renvoyer une REQUÊTE SQL VALIDE SUPABASE.
 
     <SCHEMA>{schema}</SCHEMA>
-
+    Utilise bien les noms des colonnes utilisés dans le schéma, et non celles des exemples.
     Historique de la conversation : {chat_history}
 
     Rédige uniquement la requête SQL — sans aucun texte explicatif, sans commentaire et sans backticks.
@@ -264,6 +264,7 @@ Base toi sur l'hitorique de la conversation pour formuler ta réponse:
 {chat_history}
 
 Schéma : <SCHEMA>{schema}</SCHEMA>
+Utilise bien les noms des colonnes utilisés dans le schéma, et non celles des exemples.
 
 Modèle à suivre EXACTEMENT :
 SELECT json_build_object(
@@ -315,7 +316,7 @@ def clean_sql_query(query: str) -> str:
     """Nettoie la requête SQL en retirant les backticks et espaces superflus"""
     query = query.replace("```sql", "").replace("```", "").strip()
     return query
-import re
+
 
 
 
