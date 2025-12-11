@@ -175,9 +175,9 @@ def genere_titre(prompt,db): #c'est bon c'est validé
     besoins =get_sql_chain(db)
     pprompt = f"""
     T'es un spécialiste dans le sujet de la base de données qu'on t'a fournis 
-    et t'as besoins d'écrire un titre simple et concis pour un graphique basé sur le contenue de la demande suivante :
+    et t'as besoins d'écrire un titre simple et concis pour un graphique ou une carte basé sur le contenue de la demande suivante :
     {prompt}
-    Le titre doit être court, clair et pertinent par rapport à la demande et doive refléter le contenu du graphique basé sur: 
+    Le titre doit être court, clair et pertinent par rapport à la demande et doit refléter le contenu du graphique ou de la carte basé sur: 
     {besoins}
     """
     aanswer=client.responses.create(
@@ -271,7 +271,7 @@ SELECT json_build_object(
     'features', json_agg(
         json_build_object(
             'type', 'Feature',
-            'geometry', ST_AsGeoJSON(geom)::json,
+            'geometry', ST_AsGeoJSON(nom_de_la_colonne_géographique)::json,
             'properties', json_build_object('name', name)
         )
     )
