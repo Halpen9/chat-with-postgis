@@ -44,11 +44,10 @@ database = st.secrets["postgres"]["database"]
 def init_database()-> SQLDatabase:
     #db_uri = f"mysql+mysqlconnector://{user}:{password}@{host}:{port}/{database}"
     db_uri = f"postgresql+psycopg2://{user}:{password}@{host}:{port}/{database}"
-    print (db_uri.get_table_info())
     return SQLDatabase.from_uri(db_uri)
 
 
-print (st.session_state.db.get_table_info())
+
 def get_sql_chain(db):
     template = """
     Tu es un data analyst travaillant pour une entreprise.
@@ -414,6 +413,7 @@ with st.sidebar:
         with st.spinner("Connection à la base de données..."):
             db = init_database()
             st.session_state.db=db
+            print (st.session_state.db.get_table_info())
             st.success("Connecté à la base de données!")
             st.session_state.schema_display = display_schema(st.session_state.db).invoke({})
     if st.session_state.schema_display:
