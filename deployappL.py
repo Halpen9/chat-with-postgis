@@ -413,7 +413,7 @@ with st.sidebar:
         with st.spinner("Connection à la base de données..."):
             db = init_database()
             st.session_state.db=db
-            print (st.session_state.db.get_table_info())
+            st.markdown(st.session_state.db.get_table_info())
             st.success("Connecté à la base de données!")
             st.session_state.schema_display = display_schema(st.session_state.db).invoke({})
     if st.session_state.schema_display:
