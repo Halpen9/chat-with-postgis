@@ -312,7 +312,7 @@ def generate_graph_from_prompt(prompt, db): #c'est bon normalement
     - Aucune donnée inventée : tout provient de la base de données
     - Code immédiatement exécutable
     Utilise uniquement le schéma réel suivant (ne jamais inventer de colonnes ou tables) :
-    {db.get_table_info()}
+    {schema_with_geo_via_geoalchemy(db)}
     """
     answer=client.responses.create(
         model="gpt-4o-mini", 
