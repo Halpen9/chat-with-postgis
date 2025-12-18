@@ -9,33 +9,37 @@ from langchain_groq import ChatGroq
 from openai import OpenAI
 from PIL import Image
 from datetime import datetime
-from langsmith import traceable,Client
 import folium
 from streamlit_folium import st_folium
+import json
 
 import streamlit as st
 import os
 import matplotlib.pyplot as plt 
 import io
 import base64
+from sqlalchemy import inspect
+from sqlalchemy.exc import NoInspectionAvailable
+try:
+    from geoalchemy2.types import Geometry
+    GEOALCHEMY_AVAILABLE = True
+except Exception:
+    Geometry = None
+    GEOALCHEMY_AVAILABLE = False
 
-
+load_dotenv()
 
 now = datetime.now()
 
-# LangChain
-os.environ["LANGCHAIN_TRACING_V2"] = st.secrets["LANGCHAIN_TRACING_V2"]
-os.environ["LANGCHAIN_API_KEY"] = st.secrets["LANGCHAIN_API_KEY"]
-os.environ["LANGCHAIN_PROJECT"] = st.secrets["LANGCHAIN_PROJECT"]
-
-# OPENAI
-os.environ["OPENAI_API_KEY"] = st.secrets["OPENAI_API_KEY"]
-
-host = st.secrets["postgres"]["host"]
-port = st.secrets["postgres"]["port"]
-user = st.secrets["postgres"]["user"]
-password = st.secrets["postgres"]["password"]
-database = st.secrets["postgres"]["database"]
+host = os.getenv("POSTGRES_HOST")
+port = os.getenv("POSTGRES_PORT")
+user = os.getenv("POSTGRES_USER")
+password = os.getenv("POSTGRES_PASSWORD")
+database = os.getenv("POSTGRES_DATABASE")
+os.environ["OPENAI_API_KEY"] = os.getenv("OPENAI_API_KEY")
+os.environ["LANGCHAIN_TRACING_V2"] = os.getenv("LANGCHAIN_TRACING_V2", "true")
+os.environ["LANGCHAIN_API_KEY"] = os.getenv("LANGCHAIN_API_KEY")
+os.environ["LANGCHAIN_PROJECT"] = os.getenv("LANGCHAIN_PROJECT", "finalapp")
 
 
 #client = Client()
@@ -45,8 +49,144 @@ def init_database()-> SQLDatabase:
     db_uri = f"postgresql+psycopg2://{user}:{password}@{host}:{port}/{database}"
     return SQLDatabase.from_uri(db_uri)
 
+def _choose_tooltip_fields(geojson, prefer=None, max_fields=2):
+    """
+    Retourne une liste de champs utilisables pour GeoJsonTooltip.
+    Gestion sûre si geojson['features'] est None ou vide.
+    """
+    if not geojson:
+        return []
+    features = geojson.get("features") or []
+    if not isinstance(features, list) or len(features) == 0:
+        return []
+    props = features[0].get("properties", {}) or {}
+    if not props:
+        return []
+    prefer = prefer or ["name", "label", "type_episode", "commune", "pk_residential_episode", "id"]
+    for p in prefer:
+        if p in props:
+            return [p]
+    keys = [k for k in props.keys() if k.lower() not in ("geom", "geometry")]
+    return keys[:max_fields]
+
+def schema_with_geo_via_geoalchemy(db, engine=None, schema: str = "public") -> str:
+    """
+    Version minimale et concise : récupère le schéma via SQLAlchemy.inspect si possible,
+    puis ajoute les entrées de geometry_columns en gérant simplement le cas où
+    db.run(...) renvoie une chaîne (string) représentant la liste.
+    On ne multiplie pas les vérifications — on traite juste les cas courants.
+    """
+    import ast
+
+    engine = engine or getattr(db, "_engine", None)
+    out_lines = []
+
+    # 1) Table/colonnes via inspect si possible, sinon fallback sur db.get_table_info()
+    try:
+        if engine is not None:
+            insp = inspect(engine)
+            try:
+                tables = insp.get_table_names(schema=schema)
+            except Exception:
+                tables = insp.get_table_names()
+            for table in tables:
+                out_lines.append(f"Table {table}:")
+                try:
+                    cols = insp.get_columns(table, schema=schema)
+                except Exception:
+                    cols = insp.get_columns(table)
+                for c in cols:
+                    out_lines.append(f"  - {c.get('name')}: {c.get('type')}")
+                out_lines.append("")
+        else:
+            base = db.get_table_info() or ""
+            if base:
+                out_lines.append(base)
+    except Exception:
+        # si inspect plante, on retombe sur db.get_table_info() (minimal)
+        try:
+            base = db.get_table_info() or ""
+            if base:
+                out_lines.append(base)
+        except Exception:
+            pass
+
+    # 2) geometry_columns : cas simple (string ou list/tuple)
+    try:
+        geom_meta_raw = db.run(
+            """
+            SELECT f_table_schema AS schema,
+                   f_table_name  AS table,
+                   f_geometry_column AS column,
+                   type,
+                   srid
+            FROM public.geometry_columns;
+            """
+        )
+
+        # Normaliser en liste d'enregistrements
+        if isinstance(geom_meta_raw, str):
+            # si c'est une string représentant une structure Python, essayer de la parser
+            try:
+                parsed = ast.literal_eval(geom_meta_raw)
+                if isinstance(parsed, (list, tuple)):
+                    geom_rows = list(parsed)
+                else:
+                    geom_rows = [parsed]
+            except Exception:
+                geom_rows = [geom_meta_raw]
+        elif isinstance(geom_meta_raw, (list, tuple)):
+            geom_rows = list(geom_meta_raw)
+        else:
+            geom_rows = [geom_meta_raw]
+
+        if geom_rows:
+            out_lines.append("Geometry columns (information from geometry_columns):")
+            for r in geom_rows:
+                # cas dict (idéal)
+                if isinstance(r, dict):
+                    table = str(r.get("table", "")).strip()
+                    col = str(r.get("column", "")).strip()
+                    typ = str(r.get("type", r.get("udt", ""))).strip()
+                    srid = r.get("srid", None)
+                    if srid is not None:
+                        out_lines.append(f"  - {table}.{col}: {typ} SRID={srid}")
+                    else:
+                        out_lines.append(f"  - {table}.{col}: {typ}")
+                    continue
+
+                # cas tuple/list attendu: ('schema','table','column','TYPE',srid)
+                if isinstance(r, (list, tuple)) and len(r) >= 3:
+                    parts = [str(x).strip().strip("'\"") for x in r]
+                    # si on a au moins schema, table, column
+                    if len(parts) >= 5:
+                        out_lines.append(f"  - {parts[1]}.{parts[2]}: {parts[3]} SRID={parts[4]}")
+                    elif len(parts) >= 3:
+                        out_lines.append(f"  - {parts[0]}.{parts[1]}: {parts[2]}")
+                    else:
+                        out_lines.append("  - " + " ".join(parts))
+                    continue
+
+                # fallback simple : afficher sur une seule ligne
+                s = str(r)
+                s = " ".join(s.split())
+                s = s.strip(" '\"")
+                out_lines.append("  - " + s)
+
+    except Exception:
+        # si la requête geometry_columns échoue, on ignore silencieusement (fonction minimale)
+        pass
+
+    return "\n".join(out_lines).strip()
+
 
 def get_sql_chain(db):
+    try:
+        engine = getattr(db, "_engine", None)
+        schema_text = schema_with_geo_via_geoalchemy(db, engine=engine, schema="public")
+    except Exception as e:
+        # fallback simple en cas d'erreur
+        schema_text = db.get_table_info() or f"(échec récupération schéma: {e})"
     template = """
     Tu es un data analyst travaillant pour une entreprise.
     Tu échanges avec un utilisateur qui te pose des questions sur la base de données spatial (postgis) de l'entreprise.
@@ -63,9 +203,20 @@ def get_sql_chain(db):
     - Pour calculer un rayon autour d'un point, utilise aussi ST_Distance(...::geography).
     - Toujours caster les géométries en ::geography avant ST_Distance.
     - Toujours renvoyer une REQUÊTE SQL VALIDE SUPABASE.
+    
+    IMPORTANT — CAST SÛR DES CHAMPS DE TEXTE A TRANSFORMER EN INTEGER :
+
+    Si vous devez convertir une colonne texte en entier, n'utilisez jamais directement CAST(col AS INTEGER).
+    Utilisez systématiquement cette forme sûre qui supprime les caractères non numériques et gère les valeurs non convertibles : CAST(NULLIF(regexp_replace(col, '\D', '', 'g'), '') AS INTEGER)
+    Exemple : remplacez CAST(date_fin AS INTEGER) par CAST(NULLIF(regexp_replace(date_fin, '\D', '', 'g'), '') AS INTEGER)
+    Ou utilisez la forme équivalente avec ::int : NULLIF(regexp_replace(date_fin, '\D', '', 'g'), '')::int
+    Si vous devez vérifier explicitement la validité, vous pouvez utiliser : CASE WHEN regexp_replace(col,'\D','','g') ~ '^\d+$' THEN regexp_replace(col,'\D','','g')::int ELSE NULL END Ne fournissez que la requête SQL (pas d'explication) et appliquez toujours ce pattern pour les conversions en entier. 
+
+    — Exemple concret : transformation attendue Entrée générée par défaut (problème) : SELECT ..., (CAST(le.date_fin AS INTEGER) - CAST(le.date_debut AS INTEGER)) AS duree FROM leisure_episode le;
+        Version sûre (ce que vous voulez) : SELECT ..., ( CAST(NULLIF(regexp_replace(le.date_fin, '\D', '', 'g'), '') AS INTEGER) - CAST(NULLIF(regexp_replace(le.date_debut, '\D', '', 'g'), '') AS INTEGER) ) AS duree FROM leisure_episode le;
 
     <SCHEMA>{schema}</SCHEMA>
-
+    Utilise bien les noms des colonnes utilisés dans le schéma, et non celles des exemples.
     Historique de la conversation : {chat_history}
 
     Rédige uniquement la requête SQL — sans aucun texte explicatif, sans commentaire et sans backticks.
@@ -103,11 +254,9 @@ def get_sql_chain(db):
 
     #llm = ChatGroq(model="llama-3.3-70b-versatile", temperature=0)
     llm= ChatOpenAI(model= "gpt-4o-mini")
-    def get_schema(_):
-        return db.get_table_info()
     
     return (
-        RunnablePassthrough.assign(schema=get_schema)
+        RunnablePassthrough.assign(schema=lambda _: schema_text)
         | prompt
         | llm
         | StrOutputParser()
@@ -119,6 +268,7 @@ def get_rep(user_query: str, chat_history: list):
     Tu es un spécialiste dans le sujet de la base de donnée qui est à ta disposition. Analyse la demande utilisateur et réponds UNIQUEMENT par :
     - "sql" si la question nécessite une requête SQL sur la base, c'est une base spatiale postgis.
     - "image" si l'utilisateur veut une image, carte, schéma, visualisation
+    - "map" si l'utilisateur veut une carte, visualisation géographique
     Historique : {chat_history}
     Question : {question}
     Réponse :"""
@@ -140,6 +290,16 @@ def generate_graph_from_prompt(prompt, db): #c'est bon normalement
     - Interdiction ABSOLUE d utiliser sqlite3.
     - La base de données est PostgreSQL, déjà configurée et accessible via la variable `db` passée dans l environnement.
     - Pour exécuter la requête : utilise db._engine (un engine SQLAlchemy valide).
+    IMPORTANT — CAST SÛR DES CHAMPS DE TEXTE A TRANSFORMER EN INTEGER :
+
+    Si vous devez convertir une colonne texte en entier, n'utilisez jamais directement CAST(col AS INTEGER).
+    Utilisez systématiquement cette forme sûre qui supprime les caractères non numériques et gère les valeurs non convertibles : CAST(NULLIF(regexp_replace(col, '\D', '', 'g'), '') AS INTEGER)
+    Exemple : remplacez CAST(date_fin AS INTEGER) par CAST(NULLIF(regexp_replace(date_fin, '\D', '', 'g'), '') AS INTEGER)
+    Ou utilisez la forme équivalente avec ::int : NULLIF(regexp_replace(date_fin, '\D', '', 'g'), '')::int
+    Si vous devez vérifier explicitement la validité, vous pouvez utiliser : CASE WHEN regexp_replace(col,'\D','','g') ~ '^\d+$' THEN regexp_replace(col,'\D','','g')::int ELSE NULL END Ne fournissez que la requête SQL (pas d'explication) et appliquez toujours ce pattern pour les conversions en entier. 
+
+    — Exemple concret : transformation attendue Entrée générée par défaut (problème) : SELECT ..., (CAST(le.date_fin AS INTEGER) - CAST(le.date_debut AS INTEGER)) AS duree FROM leisure_episode le;
+        Version sûre (ce que vous voulez) : SELECT ..., ( CAST(NULLIF(regexp_replace(le.date_fin, '\D', '', 'g'), '') AS INTEGER) - CAST(NULLIF(regexp_replace(le.date_debut, '\D', '', 'g'), '') AS INTEGER) ) AS duree FROM leisure_episode le;
     Utilise ce modèle :
     import pandas as pd
     df = pd.read_sql(query, db._engine)
@@ -152,7 +312,7 @@ def generate_graph_from_prompt(prompt, db): #c'est bon normalement
     - Aucune donnée inventée : tout provient de la base de données
     - Code immédiatement exécutable
     Utilise uniquement le schéma réel suivant (ne jamais inventer de colonnes ou tables) :
-    {db.get_table_info()}
+    {schema_with_geo_via_geoalchemy(db)}
     """
     answer=client.responses.create(
         model="gpt-4o-mini", 
@@ -169,13 +329,14 @@ def generate_graph_from_prompt(prompt, db): #c'est bon normalement
     img_base64_str = "data:image/png;base64," + img_base64
     return img_base64_str
 
-def genere_titre(prompt,db): #c'est bon c'est validé
+def genere_titre(prompt,db,chat_history): #c'est bon c'est validé
     besoins =get_sql_chain(db)
     pprompt = f"""
     T'es un spécialiste dans le sujet de la base de données qu'on t'a fournis 
-    et t'as besoins d'écrire un titre simple et concis pour un graphique basé sur le contenue de la demande suivante :
+    et t'as besoins d'écrire un titre simple et concis pour un graphique ou une carte basé sur le contenue de la demande suivante :
     {prompt}
-    Le titre doit être court, clair et pertinent par rapport à la demande et doive refléter le contenu du graphique basé sur: 
+    (Tu peux t'aider de l'historique de la conversation pour le contexte: {chat_history})
+    Le titre doit être court, clair et pertinent par rapport à la demande et doit refléter le contenu du graphique ou de la carte basé sur: 
     {besoins}
     """
     aanswer=client.responses.create(
@@ -183,23 +344,33 @@ def genere_titre(prompt,db): #c'est bon c'est validé
         input=pprompt
     )
     titre = aanswer.output_text  
-    print("et pour le titre ?")
     return titre
 
 
 
 def get_response(user_query : str, db: SQLDatabase, chat_history: list):
     route = get_rep(user_query, chat_history)
-
+    
+    if route == "map":
+        return {"type": "map", "query": user_query}
+    
     if route == "image":
        url = generate_graph_from_prompt(user_query,db)
        return url
 
     sql_chain = get_sql_chain(db)
+    try:
+        engine = getattr(db, "_engine", None)
+        schema_text = schema_with_geo_via_geoalchemy(db, engine=engine, schema="public")
+    except Exception as e:
+        # fallback simple en cas d'erreur
+        schema_text = db.get_table_info() or f"(échec récupération schéma: {e})"
 
     template = """
     Tu es un data analyst travaillant pour une entreprise.  
     Tu échanges avec un utilisateur qui te pose des questions sur la base de données spatial (postgis) de l'entreprise.
+
+    Si la question concerne la temporalité, la date actuelle est : {current_date}.
 
     En te basant sur :
     - le schéma des tables ci-dessous,  
@@ -223,7 +394,7 @@ def get_response(user_query : str, db: SQLDatabase, chat_history: list):
 
     chain = (
         RunnablePassthrough.assign(query=sql_chain).assign(
-            schema=lambda _: db.get_table_info(),
+            schema=lambda _: schema_text,
             response=lambda vars : db.run(vars["query"]),
         )
         | prompt
@@ -237,24 +408,116 @@ def get_response(user_query : str, db: SQLDatabase, chat_history: list):
 
     })
 
+def get_geojson_chain(db):
+    try:
+        engine = getattr(db, "_engine", None)
+        schema_text = schema_with_geo_via_geoalchemy(db, engine=engine, schema="public")
+    except Exception as e:
+        # fallback simple en cas d'erreur
+        schema_text = db.get_table_info() or f"(échec récupération schéma: {e})"
+    
+    template = """
+Tu es un data analyst travaillant pour une entreprise.
+Génère une requête SQL qui renvoie des données au format GeoJSON en utilisant EXACTEMENT les colonnes du schéma fourni.
+
+RÈGLES CRITIQUES :
+1. Rédige UNIQUEMENT la requête SQL, SANS backticks
+2. La requête doit retourner UNE SEULE colonne nommée 'geojson'
+3. Utilise json_build_object et json_agg pour construire le GeoJSON
+4. IMPORTANT : Utilise UNIQUEMENT les colonnes qui existent dans le schéma ci-dessous
+5. N'invente JAMAIS de colonnes (comme 'name' ou 'population') qui ne sont pas dans le schéma
+6. Pour la géométrie, utilise la colonne qui contient 'geom' ou similaire
+7. Pour les properties, inclus TOUTES les colonnes non-géométriques de la table
+
+IMPORTANT — CAST SÛR DES CHAMPS DE TEXTE A TRANSFORMER EN INTEGER :
+
+    Si vous devez convertir une colonne texte en entier, n'utilisez jamais directement CAST(col AS INTEGER).
+    Utilisez systématiquement cette forme sûre qui supprime les caractères non numériques et gère les valeurs non convertibles : CAST(NULLIF(regexp_replace(col, '\D', '', 'g'), '') AS INTEGER)
+    Exemple : remplacez CAST(date_fin AS INTEGER) par CAST(NULLIF(regexp_replace(date_fin, '\D', '', 'g'), '') AS INTEGER)
+    Ou utilisez la forme équivalente avec ::int : NULLIF(regexp_replace(date_fin, '\D', '', 'g'), '')::int
+    Si vous devez vérifier explicitement la validité, vous pouvez utiliser : CASE WHEN regexp_replace(col,'\D','','g') ~ '^\d+$' THEN regexp_replace(col,'\D','','g')::int ELSE NULL END Ne fournissez que la requête SQL (pas d'explication) et appliquez toujours ce pattern pour les conversions en entier. 
+
+    — Exemple concret : transformation attendue Entrée générée par défaut (problème) : SELECT ..., (CAST(le.date_fin AS INTEGER) - CAST(le.date_debut AS INTEGER)) AS duree FROM leisure_episode le;
+        Version sûre (ce que vous voulez) : SELECT ..., ( CAST(NULLIF(regexp_replace(le.date_fin, '\D', '', 'g'), '') AS INTEGER) - CAST(NULLIF(regexp_replace(le.date_debut, '\D', '', 'g'), '') AS INTEGER) ) AS duree FROM leisure_episode le;
+
+Schéma de la base de données :
+<SCHEMA>{schema}</SCHEMA>
+
+Historique de la conversation : {chat_history}
+
+ÉTAPES À SUIVRE :
+1. Identifie la table concernée par la question
+2. Repère la colonne de géométrie (généralement 'geom', 'geometry', 'location', etc.)
+3. Identifie TOUTES les autres colonnes de cette table (ce seront les properties)
+4. Si la requête SQL passée filtre certaines lignes, applique le même filtre
+
+Requête SQL de base (pour filtrage si nécessaire) : {requete_sql}
+
+TEMPLATE DE RÉPONSE (à adapter avec les VRAIES colonnes) :
+SELECT json_build_object(
+    'type', 'FeatureCollection',
+    'features', json_agg(
+        json_build_object(
+            'type', 'Feature',
+            'geometry', ST_AsGeoJSON([nom_colonne_géométrie])::json,
+            'properties', json_build_object(
+                '[colonne1]', [colonne1],
+                '[colonne2]', [colonne2],
+                '[colonne3]', [colonne3]
+                -- Liste TOUTES les colonnes non-géométriques ici
+            )
+        )
+    )
+) AS geojson
+FROM [nom_table];
+
+
+À TON TOUR - Question de l'utilisateur : {question}
+
+RAPPEL FINAL : Utilise UNIQUEMENT les colonnes qui existent réellement dans le schéma fourni !
+Requête SQL :
+"""
+    
+    prompt = ChatPromptTemplate.from_template(template)
+    llm = ChatOpenAI(model="gpt-4o-mini", temperature=0)
+    
+    return (
+        RunnablePassthrough.assign(schema=lambda _: schema_text, requete_sql=lambda _: get_sql_chain(db).invoke({"question": "{question}", "chat_history": "{chat_history}","current_date": now}))
+        | prompt
+        | llm
+        | StrOutputParser()
+    )
+
+
 def display_schema(db: SQLDatabase):
-    def get_schema(_):
-        return db.get_table_info()
+    try:
+        engine = getattr(db, "_engine", None)
+        schema_text = schema_with_geo_via_geoalchemy(db, engine=engine, schema="public")
+    except Exception as e:
+        # fallback simple en cas d'erreur
+        schema_text = db.get_table_info() or f"(échec récupération schéma: {e})"
     template = """
     Voici le schéma des tables de la base de données :
     <SCHEMA>{schema}</SCHEMA>
     Rédige une courte et concise présentation de cette base de données en français. Pas besoin d'exemples ou de détails techniques.
     Présente la de façon claire, structurée et ergonomique.
     Par exemple, noms des tables et colonnes avec une courte description en langage naturel.
+    C'est une base de données spatiale PostGIS, prends bien en comptes les colonnes géographiques.
     """
     prompt= ChatPromptTemplate.from_template(template)
     llm= ChatOpenAI(model= "gpt-4o-mini")
     return (
-        RunnablePassthrough.assign(schema=get_schema)
+        RunnablePassthrough.assign(schema=lambda _: schema_text)
         | prompt
         | llm
         | StrOutputParser()
     )
+def clean_sql_query(query: str) -> str:
+    query = query.replace("```sql", "").replace("```", "").strip()
+    return query
+
+
+
 
 
 if "chat_history" not in st.session_state:
@@ -263,6 +526,8 @@ if "chat_history" not in st.session_state:
     ]
 if "schema_display" not in st.session_state:
     st.session_state.schema_display = None
+if "maps_data" not in st.session_state:
+    st.session_state.maps_data = {}
 
 
 
@@ -276,6 +541,8 @@ with st.sidebar:
         with st.spinner("Connection à la base de données..."):
             db = init_database()
             st.session_state.db=db
+            st.markdown(schema_with_geo_via_geoalchemy(st.session_state.db))
+            print(schema_with_geo_via_geoalchemy(st.session_state.db))
             st.success("Connecté à la base de données!")
             st.session_state.schema_display = display_schema(st.session_state.db).invoke({})
     if st.session_state.schema_display:
@@ -283,14 +550,45 @@ with st.sidebar:
 
 
 for message in st.session_state.chat_history:
+    # Normaliser le contenu : si c'est [dict], prendre le dict à l'indice 0
+    raw = message.content
+    content = raw
+    if isinstance(raw, list) and len(raw) > 0 and isinstance(raw[0], dict):
+        content = raw[0]
     if isinstance(message, AIMessage):
         with st.chat_message("AI"):
-             if isinstance(message.content,str)and message.content.startswith("data:image/png;base64,"):
-                image_data = message.content.split(",")[1]
+            if isinstance(content,str)and content.startswith("data:image/png;base64,"):
+                image_data = content.split(",")[1]
                 image = Image.open(io.BytesIO(base64.b64decode(image_data)))
                 st.image(image, caption="")
-             else:
-                st.markdown(message.content)
+            # Si c'est une carte stockée
+            # Si c'est une carte stockée (content peut être dict ou [dict])
+            elif (isinstance(content, dict) and content.get("type") == "stored_map") or (
+                isinstance(content, list) and len(content) > 0 and isinstance(content[0], dict) and content[0].get("type") == "stored_map"
+            ):
+                content = content[0] if isinstance(content, list) else content
+                map_id = content.get("map_id")
+                if map_id in st.session_state.maps_data:
+                    map_data = st.session_state.maps_data[map_id]
+                    
+                    # Recréer la carte avec les données stockées
+                    m = folium.Map(location=[46.603354, 1.888334], zoom_start=6)
+                    tooltip_fields = _choose_tooltip_fields(map_data["geojson"])
+                    if tooltip_fields:
+                        tooltip = folium.GeoJsonTooltip(fields=tooltip_fields, aliases=[f"{f}:" for f in tooltip_fields], localize=True)
+                        gj = folium.GeoJson(map_data["geojson"], name="geojson")
+                        gj.add_to(m)
+                        gj.add_child(tooltip)
+                    else:
+                        folium.GeoJson(map_data["geojson"], name="geojson").add_to(m)
+                    
+                    st_folium(m, width=700, height=500, key=f"map_{map_id}")
+                    st.markdown(f"### {map_data['titre']}")
+                else:
+                    st.markdown(f"### {content.get('titre', 'Carte')}")
+                    st.info("(Carte non disponible)")
+            else:
+                st.markdown(content)
     elif isinstance(message, HumanMessage):
         with st.chat_message("Human"):
             st.markdown(message.content)
@@ -304,9 +602,134 @@ if user_query is not None and user_query.strip() != "":
     
     with st.chat_message("AI"):
         response = get_response(user_query,st.session_state.db, st.session_state.chat_history)
-        if response.startswith("data:image/png;base64,"):
+        
+        # Gestion des images
+        if isinstance(response, str) and response.startswith("data:image/png;base64,"):
             st.image(response, caption="")
-        else :
+        
+        # Gestion des cartes
+        elif isinstance(response, dict) and response.get("type") == "map":
+            try:
+                titre = genere_titre(user_query, st.session_state.db, st.session_state.chat_history)
+                
+                # Générer et nettoyer la requête SQL
+                geojson_chain = get_geojson_chain(st.session_state.db)
+                json_sql_query = geojson_chain.invoke({"question": user_query, "chat_history": st.session_state.chat_history})
+                json_sql_query = clean_sql_query(json_sql_query)
+                
+                
+                # Debug : afficher la requête
+                with st.expander("🔍 Voir la requête SQL générée"):
+                    st.code(json_sql_query, language="sql")
+                
+                # Exécuter la requête
+                result = st.session_state.db.run(json_sql_query)
+                
+                # Debug : afficher le résultat brut
+                with st.expander("🔍 Voir le résultat brut de la base"):
+                    st.write(f"**Type:** `{type(result)}`")
+                    st.write(f"**Contenu:** `{repr(result)}`")
+                
+                # Parser le résultat
+                try:
+                    import ast
+                    
+                    # Cas 1 : C'est une string représentant une structure Python
+                    if isinstance(result, str):
+                        result = result.strip()
+                        
+                        # Si ça ressemble à une structure Python (commence par [( ou [{)
+                        if result.startswith("[") or result.startswith("("):
+                            python_obj = ast.literal_eval(result)
+                            
+                            # Extraire le GeoJSON de la structure
+                            if isinstance(python_obj, list) and len(python_obj) > 0:
+                                if isinstance(python_obj[0], tuple):
+                                    geojson_data = python_obj[0][0]
+                                else:
+                                    geojson_data = python_obj[0]
+                            else:
+                                geojson_data = python_obj
+                        else:
+                            # Sinon c'est du JSON pur
+                            geojson_data = json.loads(result)
+                    
+                    # Cas 2 : C'est déjà une liste Python
+                    elif isinstance(result, list):
+                        if len(result) > 0:
+                            if isinstance(result[0], tuple):
+                                geojson_data = result[0][0]
+                            else:
+                                geojson_data = result[0]
+                        else:
+                            raise ValueError("Aucune donnée retournée")
+                    
+                    # Cas 3 : C'est déjà un dict
+                    elif isinstance(result, dict):
+                        geojson_data = result
+                    
+                    else:
+                        raise ValueError(f"Type non supporté: {type(result)}")
+                    
+                    # Vérifier que c'est bien un dict
+                    if not isinstance(geojson_data, dict):
+                        st.error(f"Le résultat n'est pas un dictionnaire: {type(geojson_data)}")
+                        raise ValueError(f"Format invalide: {type(geojson_data)}")
+                        
+                except Exception as parse_error:
+                    st.error(f"Erreur lors du parsing: {str(parse_error)}")
+                    raise
+                
+                # Vérifier la structure du GeoJSON
+                with st.expander("🔍 Voir le GeoJSON parsé"):
+                    st.json(geojson_data)
+                
+                # Créer la carte
+                m = folium.Map(location=[46.603354, 1.888334], zoom_start=6)
+                
+                # Ajouter le GeoJSON
+                tooltip_fields = _choose_tooltip_fields(geojson_data)
+                if tooltip_fields:
+                    tooltip = folium.GeoJsonTooltip(fields=tooltip_fields, aliases=[f"{f}:" for f in tooltip_fields], localize=True)
+                    gj = folium.GeoJson(geojson_data, name="geojson")
+                    gj.add_to(m)
+                    gj.add_child(tooltip)
+                else:
+                    folium.GeoJson(geojson_data, name="geojson").add_to(m)
+                
+                # Afficher la carte
+                st_folium(m, width=700, height=500)
+                st.markdown(f"### {titre}")
+
+                # IMPORTANT : Stocker les données de la carte pour pouvoir la réafficher
+                map_id = len(st.session_state.chat_history)
+                st.session_state.maps_data[map_id] = {
+                    "geojson": geojson_data,
+                    "titre": titre
+                }
+                
+                # Créer un objet de réponse spécial pour les cartes
+                response = {"type": "stored_map", "map_id": map_id, "titre": titre}
+                
+            except json.JSONDecodeError as e:
+                st.error(f"❌ Erreur de parsing JSON à la position {e.pos}")
+                st.write(f"**Message d'erreur:** {str(e)}")
+                if 'result' in locals():
+                    st.write(f"**Résultat brut:** `{repr(result)[:500]}`")
+                response = "Erreur : Le résultat de la base n'est pas un JSON valide"
+                
+            except Exception as e:
+                st.error(f"❌ Erreur : {str(e)}")
+                import traceback
+                with st.expander("Voir le détail de l'erreur"):
+                    st.code(traceback.format_exc())
+                response = f"Erreur lors de la génération de la carte"
+        
+        # Réponse textuelle normale
+        else:
             st.markdown(response)
-    st.session_state.chat_history.append(AIMessage(content=response))
+    if isinstance(response, dict):
+        st.session_state.chat_history.append(AIMessage(content=[response]))
+    else:
+        st.session_state.chat_history.append(AIMessage(content=response))
 
