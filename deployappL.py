@@ -49,7 +49,25 @@ def init_database()-> SQLDatabase:
     db_uri = f"postgresql+psycopg2://{user}:{password}@{host}:{port}/{database}"
     return SQLDatabase.from_uri(db_uri)
 
-
+def _choose_tooltip_fields(geojson, prefer=None, max_fields=2):
+    """
+    Retourne une liste de champs utilisables pour GeoJsonTooltip.
+    Gestion sûre si geojson['features'] est None ou vide.
+    """
+    if not geojson:
+        return []
+    features = geojson.get("features") or []
+    if not isinstance(features, list) or len(features) == 0:
+        return []
+    props = features[0].get("properties", {}) or {}
+    if not props:
+        return []
+    prefer = prefer or ["name", "label", "type_episode", "commune", "pk_residential_episode", "id"]
+    for p in prefer:
+        if p in props:
+            return [p]
+    keys = [k for k in props.keys() if k.lower() not in ("geom", "geometry")]
+    return keys[:max_fields]
 
 def schema_with_geo_via_geoalchemy(db, engine=None, schema: str = "public") -> str:
     """
@@ -272,6 +290,16 @@ def generate_graph_from_prompt(prompt, db): #c'est bon normalement
     - Interdiction ABSOLUE d utiliser sqlite3.
     - La base de données est PostgreSQL, déjà configurée et accessible via la variable `db` passée dans l environnement.
     - Pour exécuter la requête : utilise db._engine (un engine SQLAlchemy valide).
+    IMPORTANT — CAST SÛR DES CHAMPS DE TEXTE A TRANSFORMER EN INTEGER :
+
+    Si vous devez convertir une colonne texte en entier, n'utilisez jamais directement CAST(col AS INTEGER).
+    Utilisez systématiquement cette forme sûre qui supprime les caractères non numériques et gère les valeurs non convertibles : CAST(NULLIF(regexp_replace(col, '\D', '', 'g'), '') AS INTEGER)
+    Exemple : remplacez CAST(date_fin AS INTEGER) par CAST(NULLIF(regexp_replace(date_fin, '\D', '', 'g'), '') AS INTEGER)
+    Ou utilisez la forme équivalente avec ::int : NULLIF(regexp_replace(date_fin, '\D', '', 'g'), '')::int
+    Si vous devez vérifier explicitement la validité, vous pouvez utiliser : CASE WHEN regexp_replace(col,'\D','','g') ~ '^\d+$' THEN regexp_replace(col,'\D','','g')::int ELSE NULL END Ne fournissez que la requête SQL (pas d'explication) et appliquez toujours ce pattern pour les conversions en entier. 
+
+    — Exemple concret : transformation attendue Entrée générée par défaut (problème) : SELECT ..., (CAST(le.date_fin AS INTEGER) - CAST(le.date_debut AS INTEGER)) AS duree FROM leisure_episode le;
+        Version sûre (ce que vous voulez) : SELECT ..., ( CAST(NULLIF(regexp_replace(le.date_fin, '\D', '', 'g'), '') AS INTEGER) - CAST(NULLIF(regexp_replace(le.date_debut, '\D', '', 'g'), '') AS INTEGER) ) AS duree FROM leisure_episode le;
     Utilise ce modèle :
     import pandas as pd
     df = pd.read_sql(query, db._engine)
@@ -301,12 +329,13 @@ def generate_graph_from_prompt(prompt, db): #c'est bon normalement
     img_base64_str = "data:image/png;base64," + img_base64
     return img_base64_str
 
-def genere_titre(prompt,db): #c'est bon c'est validé
+def genere_titre(prompt,db,chat_history): #c'est bon c'est validé
     besoins =get_sql_chain(db)
     pprompt = f"""
     T'es un spécialiste dans le sujet de la base de données qu'on t'a fournis 
     et t'as besoins d'écrire un titre simple et concis pour un graphique ou une carte basé sur le contenue de la demande suivante :
     {prompt}
+    (Tu peux t'aider de l'historique de la conversation pour le contexte: {chat_history})
     Le titre doit être court, clair et pertinent par rapport à la demande et doit refléter le contenu du graphique ou de la carte basé sur: 
     {besoins}
     """
@@ -315,7 +344,6 @@ def genere_titre(prompt,db): #c'est bon c'est validé
         input=pprompt
     )
     titre = aanswer.output_text  
-    print("et pour le titre ?")
     return titre
 
 
@@ -401,6 +429,17 @@ RÈGLES CRITIQUES :
 6. Pour la géométrie, utilise la colonne qui contient 'geom' ou similaire
 7. Pour les properties, inclus TOUTES les colonnes non-géométriques de la table
 
+IMPORTANT — CAST SÛR DES CHAMPS DE TEXTE A TRANSFORMER EN INTEGER :
+
+    Si vous devez convertir une colonne texte en entier, n'utilisez jamais directement CAST(col AS INTEGER).
+    Utilisez systématiquement cette forme sûre qui supprime les caractères non numériques et gère les valeurs non convertibles : CAST(NULLIF(regexp_replace(col, '\D', '', 'g'), '') AS INTEGER)
+    Exemple : remplacez CAST(date_fin AS INTEGER) par CAST(NULLIF(regexp_replace(date_fin, '\D', '', 'g'), '') AS INTEGER)
+    Ou utilisez la forme équivalente avec ::int : NULLIF(regexp_replace(date_fin, '\D', '', 'g'), '')::int
+    Si vous devez vérifier explicitement la validité, vous pouvez utiliser : CASE WHEN regexp_replace(col,'\D','','g') ~ '^\d+$' THEN regexp_replace(col,'\D','','g')::int ELSE NULL END Ne fournissez que la requête SQL (pas d'explication) et appliquez toujours ce pattern pour les conversions en entier. 
+
+    — Exemple concret : transformation attendue Entrée générée par défaut (problème) : SELECT ..., (CAST(le.date_fin AS INTEGER) - CAST(le.date_debut AS INTEGER)) AS duree FROM leisure_episode le;
+        Version sûre (ce que vous voulez) : SELECT ..., ( CAST(NULLIF(regexp_replace(le.date_fin, '\D', '', 'g'), '') AS INTEGER) - CAST(NULLIF(regexp_replace(le.date_debut, '\D', '', 'g'), '') AS INTEGER) ) AS duree FROM leisure_episode le;
+
 Schéma de la base de données :
 <SCHEMA>{schema}</SCHEMA>
 
@@ -432,59 +471,6 @@ SELECT json_build_object(
 ) AS geojson
 FROM [nom_table];
 
-EXEMPLES CONCRETS :
-
-Exemple 1 - Si la table 'cities' a les colonnes : id, name, population, geom
-SELECT json_build_object(
-    'type', 'FeatureCollection',
-    'features', json_agg(
-        json_build_object(
-            'type', 'Feature',
-            'geometry', ST_AsGeoJSON(geom)::json,
-            'properties', json_build_object(
-                'id', id,
-                'name', name,
-                'population', population
-            )
-        )
-    )
-) AS geojson
-FROM cities;
-
-Exemple 2 - Si la table 'deliveries' a les colonnes : id, delivered_at, status, location
-SELECT json_build_object(
-    'type', 'FeatureCollection',
-    'features', json_agg(
-        json_build_object(
-            'type', 'Feature',
-            'geometry', ST_AsGeoJSON(location)::json,
-            'properties', json_build_object(
-                'id', id,
-                'delivered_at', delivered_at,
-                'status', status
-            )
-        )
-    )
-) AS geojson
-FROM deliveries;
-
-Exemple 3 - Si besoin de filtrer (ex: seulement les livraisons livrées)
-SELECT json_build_object(
-    'type', 'FeatureCollection',
-    'features', json_agg(
-        json_build_object(
-            'type', 'Feature',
-            'geometry', ST_AsGeoJSON(location)::json,
-            'properties', json_build_object(
-                'id', id,
-                'delivered_at', delivered_at,
-                'status', status
-            )
-        )
-    )
-) AS geojson
-FROM deliveries
-WHERE status = 'delivered';
 
 À TON TOUR - Question de l'utilisateur : {question}
 
@@ -587,15 +573,14 @@ for message in st.session_state.chat_history:
                     
                     # Recréer la carte avec les données stockées
                     m = folium.Map(location=[46.603354, 1.888334], zoom_start=6)
-                    folium.GeoJson(
-                        map_data["geojson"],
-                        name="geojson",
-                        tooltip=folium.GeoJsonTooltip(
-                            fields=['name'] if 'features' in map_data["geojson"] and len(map_data["geojson"].get('features', [])) > 0 else [],
-                            aliases=['Nom:'],
-                            localize=True
-                        )
-                    ).add_to(m)
+                    tooltip_fields = _choose_tooltip_fields(map_data["geojson"])
+                    if tooltip_fields:
+                        tooltip = folium.GeoJsonTooltip(fields=tooltip_fields, aliases=[f"{f}:" for f in tooltip_fields], localize=True)
+                        gj = folium.GeoJson(map_data["geojson"], name="geojson")
+                        gj.add_to(m)
+                        gj.add_child(tooltip)
+                    else:
+                        folium.GeoJson(map_data["geojson"], name="geojson").add_to(m)
                     
                     st_folium(m, width=700, height=500, key=f"map_{map_id}")
                     st.markdown(f"### {map_data['titre']}")
@@ -625,7 +610,7 @@ if user_query is not None and user_query.strip() != "":
         # Gestion des cartes
         elif isinstance(response, dict) and response.get("type") == "map":
             try:
-                titre = genere_titre(user_query, st.session_state.db)
+                titre = genere_titre(user_query, st.session_state.db, st.session_state.chat_history)
                 
                 # Générer et nettoyer la requête SQL
                 geojson_chain = get_geojson_chain(st.session_state.db)
@@ -703,15 +688,14 @@ if user_query is not None and user_query.strip() != "":
                 m = folium.Map(location=[46.603354, 1.888334], zoom_start=6)
                 
                 # Ajouter le GeoJSON
-                folium.GeoJson(
-                    geojson_data,
-                    name="geojson",
-                    tooltip=folium.GeoJsonTooltip(
-                        fields=['name'] if 'features' in geojson_data and len(geojson_data.get('features', [])) > 0 else [],
-                        aliases=['Nom:'],
-                        localize=True
-                    )
-                ).add_to(m)
+                tooltip_fields = _choose_tooltip_fields(geojson_data)
+                if tooltip_fields:
+                    tooltip = folium.GeoJsonTooltip(fields=tooltip_fields, aliases=[f"{f}:" for f in tooltip_fields], localize=True)
+                    gj = folium.GeoJson(geojson_data, name="geojson")
+                    gj.add_to(m)
+                    gj.add_child(tooltip)
+                else:
+                    folium.GeoJson(geojson_data, name="geojson").add_to(m)
                 
                 # Afficher la carte
                 st_folium(m, width=700, height=500)
