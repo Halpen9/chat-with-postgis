@@ -31,15 +31,19 @@ load_dotenv()
 
 now = datetime.now()
 
-host = os.getenv("POSTGRES_HOST")
-port = os.getenv("POSTGRES_PORT")
-user = os.getenv("POSTGRES_USER")
-password = os.getenv("POSTGRES_PASSWORD")
-database = os.getenv("POSTGRES_DATABASE")
-os.environ["OPENAI_API_KEY"] = os.getenv("OPENAI_API_KEY")
-os.environ["LANGCHAIN_TRACING_V2"] = os.getenv("LANGCHAIN_TRACING_V2", "true")
-os.environ["LANGCHAIN_API_KEY"] = os.getenv("LANGCHAIN_API_KEY")
-os.environ["LANGCHAIN_PROJECT"] = os.getenv("LANGCHAIN_PROJECT", "finalapp")
+# LangChain
+os.environ["LANGCHAIN_TRACING_V2"] = st.secrets["LANGCHAIN_TRACING_V2"]
+os.environ["LANGCHAIN_API_KEY"] = st.secrets["LANGCHAIN_API_KEY"]
+os.environ["LANGCHAIN_PROJECT"] = st.secrets["LANGCHAIN_PROJECT"]
+
+# OPENAI
+os.environ["OPENAI_API_KEY"] = st.secrets["OPENAI_API_KEY"]
+
+host = st.secrets["postgres"]["host"]
+port = st.secrets["postgres"]["port"]
+user = st.secrets["postgres"]["user"]
+password = st.secrets["postgres"]["password"]
+database = st.secrets["postgres"]["database"]
 
 
 #client = Client()
