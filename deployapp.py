@@ -200,6 +200,12 @@ def get_sql_chain(db):
 
     Si la question concerne la temporalité, la date actuelle est : {current_date}.
 
+    La base de données est une base de données sur les trajectoires de vies, celle-ci est décomposé en épisode de vie.
+    Il y a 4 types d'épisode : familial, professionnel, loisir et résidentiel.
+    Un épisode a donc un début et une fin, et les épisodes s'enchainent. 
+    C'est a dire que la fin d'un épisode est aussi le début du suivant. 
+    ex : 3 épisodes qui se suivent ont en commun la date de fin du premier est la date de début du second et la date de fin du deuxième est la date de début du troisième etc... 
+
     ⚠️ IMPORTANT — RÈGLES POUR SUPABASE :
     - N'utilise JAMAIS ST_DistanceSphere().
     - Pour calculer des distances réelles en mètres, utilise : 
@@ -226,28 +232,58 @@ def get_sql_chain(db):
     Rédige uniquement la requête SQL — sans aucun texte explicatif, sans commentaire et sans backticks.
 
     Exemple :
-    Question : Trouver les bureaux dans un rayon de 100 km autour de Paris ?
+    Question : Quels sont les lieux de résidence successifs de la personne 5067, classés dans l'ordre chronologique ?
     Requête SQL : 
-    SELECT o.name, c.name AS city
-    FROM offices o
-    JOIN cities c ON o.city_id = c.id
-    WHERE ST_DistanceSphere(o.geom, ST_GeomFromText('POINT(2.3522 48.8566)', 4326)) < 100000;
+    SELECT r.type_episode, l.commune, r.date_debut, r.date_fin
+    FROM residential_episode r
+    JOIN localisation l ON r.fk_ref_loc = l.pk_ref_loc
+    WHERE r.fk_personne_id = 5067
+    ORDER BY r.date_debut;
 
 
-    Question : Trouver les clients à moins de 50 km du bureau de Lyon.
+    Question : Quels événements professionnels ont eu lieu à moins de 50 km du lieu de naissance de chaque personne ? (limite de 20)
     Requête SQL : 
-    SELECT cl.name, cl.revenue
-    FROM clients cl
-    JOIN offices o ON cl.office_id = o.id
-    WHERE o.name = 'Lyon Center'
-    AND ST_DistanceSphere(cl.geom, o.geom) < 50000;
+    SELECT pe.pk_professionnal_event, pe.type_event, p.pk_personne_id
+    FROM professionnal_event pe
+    JOIN personne p ON pe.fk_personne_id = p.pk_personne_id
+    JOIN localisation l_event ON pe.fk_ref_loc = l_event.pk_ref_loc
+    JOIN localisation l_personne ON p.fk_ref_loc = l_personne.pk_ref_loc
+    WHERE ST_Distance(l_event.geom::geography, l_personne.geom::geography) < 50000
+    LIMIT 20;
 
-    Question : Calculer la distance entre Paris et Marseille.
+
+    Question : Quelles personnes ont vécu une trajectoire résidentielle longue (plus de 3 lieux différents) et ont connu au moins un événement familial et un événement professionnel dans des communes différentes ? (limite de 20)
     Requête SQL : 
-    SELECT ST_DistanceSphere(
-        (SELECT geom FROM cities WHERE name = 'Paris'),
-        (SELECT geom FROM cities WHERE name = 'Marseille')
-    ) / 1000 AS distance_km;
+    WITH residential_count AS (
+        SELECT 
+            fk_personne_id,
+            COUNT(DISTINCT fk_ref_loc) AS nb_lieux
+        FROM residential_episode
+        GROUP BY fk_personne_id
+    ),
+    familial_places AS (
+        SELECT 
+            fk_personne_id,
+            fk_ref_loc
+        FROM familial_event
+    ),
+    professionnal_places AS (
+        SELECT 
+            fk_personne_id,
+            fk_ref_loc
+        FROM professionnal_event
+    )
+    SELECT DISTINCT
+        rc.fk_personne_id,
+        rc.nb_lieux
+    FROM residential_count rc
+    JOIN familial_places fe
+        ON rc.fk_personne_id = fe.fk_personne_id
+    JOIN professionnal_places pe
+        ON rc.fk_personne_id = pe.fk_personne_id
+    WHERE rc.nb_lieux > 3
+        AND fe.fk_ref_loc <> pe.fk_ref_loc
+    LIMIT 20;
 
     À ton tour :
 
@@ -271,7 +307,7 @@ def get_rep(user_query: str, chat_history: list):
     prompt = """
     Tu es un spécialiste dans le sujet de la base de donnée qui est à ta disposition. Analyse la demande utilisateur et réponds UNIQUEMENT par :
     - "sql" si la question nécessite une requête SQL sur la base, c'est une base spatiale postgis.
-    - "image" si l'utilisateur veut une image, carte, schéma, visualisation
+    - "image" si l'utilisateur veut une image, schéma, visualisation
     - "map" si l'utilisateur veut une carte, visualisation géographique
     Historique : {chat_history}
     Question : {question}
@@ -423,6 +459,12 @@ def get_geojson_chain(db):
     template = """
 Tu es un data analyst travaillant pour une entreprise.
 Génère une requête SQL qui renvoie des données au format GeoJSON en utilisant EXACTEMENT les colonnes du schéma fourni.
+
+La base de données est une base de données sur les trajectoires de vies, celle-ci est décomposé en épisode de vie.
+Il y a 4 types d'épisode : familial, professionnel, loisir et résidentiel.
+Un épisode a donc un début et une fin, et les épisodes s'enchainent. 
+C'est a dire que la fin d'un épisode est aussi le début du suivant. 
+ex : 3 épisodes qui se suivent ont en commun la date de fin du premier est la date de début du second et la date de fin du deuxième est la date de début du troisième etc... 
 
 RÈGLES CRITIQUES :
 1. Rédige UNIQUEMENT la requête SQL, SANS backticks

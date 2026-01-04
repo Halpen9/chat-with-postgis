@@ -453,7 +453,6 @@ def get_geojson_chain(db):
         engine = getattr(db, "_engine", None)
         schema_text = schema_with_geo_via_geoalchemy(db, engine=engine, schema="public")
     except Exception as e:
-        # fallback simple en cas d'erreur
         schema_text = db.get_table_info() or f"(échec récupération schéma: {e})"
     
     template = """
@@ -471,20 +470,21 @@ RÈGLES CRITIQUES :
 2. La requête doit retourner UNE SEULE colonne nommée 'geojson'
 3. Utilise json_build_object et json_agg pour construire le GeoJSON
 4. IMPORTANT : Utilise UNIQUEMENT les colonnes qui existent dans le schéma ci-dessous
-5. N'invente JAMAIS de colonnes (comme 'name' ou 'population') qui ne sont pas dans le schéma
+5. N'invente JAMAIS de colonnes qui ne sont pas dans le schéma
 6. Pour la géométrie, utilise la colonne qui contient 'geom' ou similaire
 7. Pour les properties, inclus TOUTES les colonnes non-géométriques de la table
+8. **CRITIQUE** : Si la question mentionne plusieurs types/catégories (ex: "résidentiels ET professionnels"), tu DOIS inclure TOUTES les lignes correspondantes sans filtre restrictif sur le type
 
-IMPORTANT — CAST SÛR DES CHAMPS DE TEXTE A TRANSFORMER EN INTEGER :
+IMPORTANT — GESTION DES MULTIPLES TYPES/CATÉGORIES :
+- Si la question demande "trajectoires résidentielles ET professionnelles", ne filtre PAS sur un seul type
+- Utilise WHERE ... IN (...) ou WHERE ... OR ... pour inclure TOUS les types demandés
+- NE JAMAIS filtrer sur un seul type quand plusieurs sont demandés
+- Exemple CORRECT : WHERE type_episode IN ('Res', 'Pro')
+- Exemple INCORRECT : WHERE type_episode = 'Res' (si les deux types sont demandés)
 
-    Si vous devez convertir une colonne texte en entier, n'utilisez jamais directement CAST(col AS INTEGER).
-    Utilisez systématiquement cette forme sûre qui supprime les caractères non numériques et gère les valeurs non convertibles : CAST(NULLIF(regexp_replace(col, '\D', '', 'g'), '') AS INTEGER)
-    Exemple : remplacez CAST(date_fin AS INTEGER) par CAST(NULLIF(regexp_replace(date_fin, '\D', '', 'g'), '') AS INTEGER)
-    Ou utilisez la forme équivalente avec ::int : NULLIF(regexp_replace(date_fin, '\D', '', 'g'), '')::int
-    Si vous devez vérifier explicitement la validité, vous pouvez utiliser : CASE WHEN regexp_replace(col,'\D','','g') ~ '^\d+$' THEN regexp_replace(col,'\D','','g')::int ELSE NULL END Ne fournissez que la requête SQL (pas d'explication) et appliquez toujours ce pattern pour les conversions en entier. 
-
-    — Exemple concret : transformation attendue Entrée générée par défaut (problème) : SELECT ..., (CAST(le.date_fin AS INTEGER) - CAST(le.date_debut AS INTEGER)) AS duree FROM leisure_episode le;
-        Version sûre (ce que vous voulez) : SELECT ..., ( CAST(NULLIF(regexp_replace(le.date_fin, '\D', '', 'g'), '') AS INTEGER) - CAST(NULLIF(regexp_replace(le.date_debut, '\D', '', 'g'), '') AS INTEGER) ) AS duree FROM leisure_episode le;
+IMPORTANT — CAST SÛR DES CHAMPS DE TEXTE :
+Si vous devez convertir une colonne texte en entier, utilisez :
+CAST(NULLIF(regexp_replace(col, '\D', '', 'g'), '') AS INTEGER)
 
 Schéma de la base de données :
 <SCHEMA>{schema}</SCHEMA>
@@ -493,13 +493,17 @@ Historique de la conversation : {chat_history}
 
 ÉTAPES À SUIVRE :
 1. Identifie la table concernée par la question
-2. Repère la colonne de géométrie (généralement 'geom', 'geometry', 'location', etc.)
-3. Identifie TOUTES les autres colonnes de cette table (ce seront les properties)
-4. Si la requête SQL passée filtre certaines lignes, applique le même filtre
+2. Identifie TOUS les types/catégories demandés dans la question
+3. Repère la colonne de géométrie
+4. Identifie toutes les colonnes non-géométriques (ce seront les properties)
+5. **SI PLUSIEURS TYPES SONT DEMANDÉS** : utilise WHERE col IN ('type1', 'type2', ...) ou plusieurs OR
+6. Si la requête SQL passée filtre certaines lignes, applique le même filtre MAIS sans restreindre les types si plusieurs sont demandés
 
-Requête SQL de base (pour filtrage si nécessaire) : {requete_sql}
+Requête SQL de base (pour référence, PAS pour copier le filtre de type) : {requete_sql}
 
 TEMPLATE DE RÉPONSE (à adapter avec les VRAIES colonnes) :
+
+-- CAS 1 : Plusieurs types demandés (ex: "résidentiels ET professionnels")
 SELECT json_build_object(
     'type', 'FeatureCollection',
     'features', json_agg(
@@ -509,18 +513,96 @@ SELECT json_build_object(
             'properties', json_build_object(
                 '[colonne1]', [colonne1],
                 '[colonne2]', [colonne2],
-                '[colonne3]', [colonne3]
-                -- Liste TOUTES les colonnes non-géométriques ici
+                'type_episode', type_episode  -- IMPORTANT : inclure le type dans les properties
             )
         )
     )
 ) AS geojson
-FROM [nom_table];
+FROM [nom_table]
+WHERE type_episode IN ('Res', 'Pro');  -- TOUS les types demandés
 
+-- CAS 2 : Un seul type demandé (ex: "seulement résidentiels")
+SELECT json_build_object(
+    'type', 'FeatureCollection',
+    'features', json_agg(
+        json_build_object(
+            'type', 'Feature',
+            'geometry', ST_AsGeoJSON([nom_colonne_géométrie])::json,
+            'properties', json_build_object(
+                '[colonne1]', [colonne1],
+                '[colonne2]', [colonne2],
+                'type_episode', type_episode
+            )
+        )
+    )
+) AS geojson
+FROM [nom_table]
+WHERE type_episode = 'Res';
+
+EXEMPLES CONCRETS :
+
+Question : "Montre-moi une carte des épisodes résidentiels"
+Requête : 
+SELECT json_build_object(
+    'type', 'FeatureCollection',
+    'features', json_agg(
+        json_build_object(
+            'type', 'Feature',
+            'geometry', ST_AsGeoJSON(geom)::json,
+            'properties', json_build_object(
+                'pk_residential_episode', pk_residential_episode,
+                'type_episode', type_episode,
+                'commune', commune
+            )
+        )
+    )
+) AS geojson
+FROM residential_episode
+WHERE type_episode = 'Res';
+
+Question : "Montre-moi une carte des trajectoires résidentielles ET professionnelles"
+Requête :
+SELECT json_build_object(
+    'type', 'FeatureCollection',
+    'features', json_agg(
+        json_build_object(
+            'type', 'Feature',
+            'geometry', ST_AsGeoJSON(geom)::json,
+            'properties', json_build_object(
+                'pk_residential_episode', pk_residential_episode,
+                'type_episode', type_episode,
+                'commune', commune
+            )
+        )
+    )
+) AS geojson
+FROM residential_episode
+WHERE type_episode IN ('Res', 'Pro');  -- LES DEUX TYPES !
+
+Question : "Carte de tous les épisodes"
+Requête :
+SELECT json_build_object(
+    'type', 'FeatureCollection',
+    'features', json_agg(
+        json_build_object(
+            'type', 'Feature',
+            'geometry', ST_AsGeoJSON(geom)::json,
+            'properties', json_build_object(
+                'pk_residential_episode', pk_residential_episode,
+                'type_episode', type_episode,
+                'commune', commune
+            )
+        )
+    )
+) AS geojson
+FROM residential_episode;  -- AUCUN FILTRE = TOUS LES TYPES
 
 À TON TOUR - Question de l'utilisateur : {question}
 
-RAPPEL FINAL : Utilise UNIQUEMENT les colonnes qui existent réellement dans le schéma fourni !
+RAPPEL FINAL : 
+- Utilise UNIQUEMENT les colonnes qui existent dans le schéma
+- Si PLUSIEURS types sont demandés, utilise IN (...) ou OR pour les inclure TOUS
+- Inclus TOUJOURS la colonne type_episode dans les properties pour distinguer les points
 Requête SQL :
 """
     
@@ -528,12 +610,18 @@ Requête SQL :
     llm = ChatOpenAI(model="gpt-4o-mini", temperature=0)
     
     return (
-        RunnablePassthrough.assign(schema=lambda _: schema_text, requete_sql=lambda _: get_sql_chain(db).invoke({"question": "{question}", "chat_history": "{chat_history}","current_date": now}))
+        RunnablePassthrough.assign(
+            schema=lambda _: schema_text, 
+            requete_sql=lambda vars: get_sql_chain(db).invoke({
+                "question": vars.get("question", ""),
+                "chat_history": vars.get("chat_history", []),
+                "current_date": now
+            })
+        )
         | prompt
         | llm
         | StrOutputParser()
     )
-
 
 def display_schema(db: SQLDatabase):
     try:
