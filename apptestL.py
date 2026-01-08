@@ -196,6 +196,12 @@ def get_sql_chain(db):
 
     Si la question concerne la temporalité, la date actuelle est : {current_date}.
 
+    La base de données est une base de données sur les trajectoires de vies, celle-ci est décomposé en épisode de vie.
+    Il y a 4 types d'épisode : familial, professionnel, loisir et résidentiel.
+    Un épisode a donc un début et une fin, et les épisodes s'enchainent. 
+    C'est a dire que la fin d'un épisode est aussi le début du suivant. 
+    ex : 3 épisodes qui se suivent ont en commun la date de fin du premier est la date de début du second et la date de fin du deuxième est la date de début du troisième etc... 
+
     ⚠️ IMPORTANT — RÈGLES POUR SUPABASE :
     - N'utilise JAMAIS ST_DistanceSphere().
     - Pour calculer des distances réelles en mètres, utilise : 
@@ -222,28 +228,58 @@ def get_sql_chain(db):
     Rédige uniquement la requête SQL — sans aucun texte explicatif, sans commentaire et sans backticks.
 
     Exemple :
-    Question : Trouver les bureaux dans un rayon de 100 km autour de Paris ?
+    Question : Quels sont les lieux de résidence successifs de la personne 5067, classés dans l'ordre chronologique ?
     Requête SQL : 
-    SELECT o.name, c.name AS city
-    FROM offices o
-    JOIN cities c ON o.city_id = c.id
-    WHERE ST_DistanceSphere(o.geom, ST_GeomFromText('POINT(2.3522 48.8566)', 4326)) < 100000;
+    SELECT r.type_episode, l.commune, r.date_debut, r.date_fin
+    FROM residential_episode r
+    JOIN localisation l ON r.fk_ref_loc = l.pk_ref_loc
+    WHERE r.fk_personne_id = 5067
+    ORDER BY r.date_debut;
 
 
-    Question : Trouver les clients à moins de 50 km du bureau de Lyon.
+    Question : Quels événements professionnels ont eu lieu à moins de 50 km du lieu de naissance de chaque personne ? (limite de 20)
     Requête SQL : 
-    SELECT cl.name, cl.revenue
-    FROM clients cl
-    JOIN offices o ON cl.office_id = o.id
-    WHERE o.name = 'Lyon Center'
-    AND ST_DistanceSphere(cl.geom, o.geom) < 50000;
+    SELECT pe.pk_professionnal_event, pe.type_event, p.pk_personne_id
+    FROM professionnal_event pe
+    JOIN personne p ON pe.fk_personne_id = p.pk_personne_id
+    JOIN localisation l_event ON pe.fk_ref_loc = l_event.pk_ref_loc
+    JOIN localisation l_personne ON p.fk_ref_loc = l_personne.pk_ref_loc
+    WHERE ST_Distance(l_event.geom::geography, l_personne.geom::geography) < 50000
+    LIMIT 20;
 
-    Question : Calculer la distance entre Paris et Marseille.
+
+    Question : Quelles personnes ont vécu une trajectoire résidentielle longue (plus de 3 lieux différents) et ont connu au moins un événement familial et un événement professionnel dans des communes différentes ? (limite de 20)
     Requête SQL : 
-    SELECT ST_DistanceSphere(
-        (SELECT geom FROM cities WHERE name = 'Paris'),
-        (SELECT geom FROM cities WHERE name = 'Marseille')
-    ) / 1000 AS distance_km;
+    WITH residential_count AS (
+        SELECT 
+            fk_personne_id,
+            COUNT(DISTINCT fk_ref_loc) AS nb_lieux
+        FROM residential_episode
+        GROUP BY fk_personne_id
+    ),
+    familial_places AS (
+        SELECT 
+            fk_personne_id,
+            fk_ref_loc
+        FROM familial_event
+    ),
+    professionnal_places AS (
+        SELECT 
+            fk_personne_id,
+            fk_ref_loc
+        FROM professionnal_event
+    )
+    SELECT DISTINCT
+        rc.fk_personne_id,
+        rc.nb_lieux
+    FROM residential_count rc
+    JOIN familial_places fe
+        ON rc.fk_personne_id = fe.fk_personne_id
+    JOIN professionnal_places pe
+        ON rc.fk_personne_id = pe.fk_personne_id
+    WHERE rc.nb_lieux > 3
+        AND fe.fk_ref_loc <> pe.fk_ref_loc
+    LIMIT 20;
 
     À ton tour :
 
@@ -267,7 +303,7 @@ def get_rep(user_query: str, chat_history: list):
     prompt = """
     Tu es un spécialiste dans le sujet de la base de donnée qui est à ta disposition. Analyse la demande utilisateur et réponds UNIQUEMENT par :
     - "sql" si la question nécessite une requête SQL sur la base, c'est une base spatiale postgis.
-    - "image" si l'utilisateur veut une image, carte, schéma, visualisation
+    - "image" si l'utilisateur veut une image, schéma, visualisation
     - "map" si l'utilisateur veut une carte, visualisation géographique
     Historique : {chat_history}
     Question : {question}
@@ -413,7 +449,6 @@ def get_geojson_chain(db):
         engine = getattr(db, "_engine", None)
         schema_text = schema_with_geo_via_geoalchemy(db, engine=engine, schema="public")
     except Exception as e:
-        # fallback simple en cas d'erreur
         schema_text = db.get_table_info() or f"(échec récupération schéma: {e})"
     
     template = """
@@ -425,56 +460,126 @@ RÈGLES CRITIQUES :
 2. La requête doit retourner UNE SEULE colonne nommée 'geojson'
 3. Utilise json_build_object et json_agg pour construire le GeoJSON
 4. IMPORTANT : Utilise UNIQUEMENT les colonnes qui existent dans le schéma ci-dessous
-5. N'invente JAMAIS de colonnes (comme 'name' ou 'population') qui ne sont pas dans le schéma
+5. N'invente JAMAIS de colonnes qui ne sont pas dans le schéma
 6. Pour la géométrie, utilise la colonne qui contient 'geom' ou similaire
 7. Pour les properties, inclus TOUTES les colonnes non-géométriques de la table
+8. **CRITIQUE** : Si la question mentionne plusieurs types/catégories, tu DOIS inclure TOUTES les lignes correspondantes
 
-IMPORTANT — CAST SÛR DES CHAMPS DE TEXTE A TRANSFORMER EN INTEGER :
+IMPORTANT — GESTION DES COORDONNÉES :
+- N'utilise JAMAIS de placeholders comme <longitude> ou <latitude>
+- Si des coordonnées spécifiques sont mentionnées dans la question, utilise-les directement
+- Si AUCUNE coordonnée n'est fournie, NE FILTRE PAS par distance géographique
+- N'invente PAS de coordonnées
+- Exemple : Si l'utilisateur demande "carte des trajectoires", renvoie TOUTES les trajectoires sans filtre de distance
 
-    Si vous devez convertir une colonne texte en entier, n'utilisez jamais directement CAST(col AS INTEGER).
-    Utilisez systématiquement cette forme sûre qui supprime les caractères non numériques et gère les valeurs non convertibles : CAST(NULLIF(regexp_replace(col, '\D', '', 'g'), '') AS INTEGER)
-    Exemple : remplacez CAST(date_fin AS INTEGER) par CAST(NULLIF(regexp_replace(date_fin, '\D', '', 'g'), '') AS INTEGER)
-    Ou utilisez la forme équivalente avec ::int : NULLIF(regexp_replace(date_fin, '\D', '', 'g'), '')::int
-    Si vous devez vérifier explicitement la validité, vous pouvez utiliser : CASE WHEN regexp_replace(col,'\D','','g') ~ '^\d+$' THEN regexp_replace(col,'\D','','g')::int ELSE NULL END Ne fournissez que la requête SQL (pas d'explication) et appliquez toujours ce pattern pour les conversions en entier. 
+IMPORTANT — GESTION DES MULTIPLES TYPES/CATÉGORIES :
+- Si la question demande "trajectoires résidentielles ET professionnelles", tu dois combiner les deux tables
+- Utilise UNION ALL pour combiner les résultats de plusieurs tables
+- Chaque partie du UNION doit avoir la même structure de colonnes
+- Assure-toi que chaque partie retourne un seul json_build_object avec json_agg
 
-    — Exemple concret : transformation attendue Entrée générée par défaut (problème) : SELECT ..., (CAST(le.date_fin AS INTEGER) - CAST(le.date_debut AS INTEGER)) AS duree FROM leisure_episode le;
-        Version sûre (ce que vous voulez) : SELECT ..., ( CAST(NULLIF(regexp_replace(le.date_fin, '\D', '', 'g'), '') AS INTEGER) - CAST(NULLIF(regexp_replace(le.date_debut, '\D', '', 'g'), '') AS INTEGER) ) AS duree FROM leisure_episode le;
+IMPORTANT — CAST SÛR DES CHAMPS DE TEXTE :
+Si vous devez convertir une colonne texte en entier, utilisez :
+CAST(NULLIF(regexp_replace(col, '\D', '', 'g'), '') AS INTEGER)
 
 Schéma de la base de données :
 <SCHEMA>{schema}</SCHEMA>
 
 Historique de la conversation : {chat_history}
 
-ÉTAPES À SUIVRE :
-1. Identifie la table concernée par la question
-2. Repère la colonne de géométrie (généralement 'geom', 'geometry', 'location', etc.)
-3. Identifie TOUTES les autres colonnes de cette table (ce seront les properties)
-4. Si la requête SQL passée filtre certaines lignes, applique le même filtre
+Requête SQL de base (pour référence si filtres nécessaires) : {requete_sql}
 
-Requête SQL de base (pour filtrage si nécessaire) : {requete_sql}
+EXEMPLES CONCRETS :
 
-TEMPLATE DE RÉPONSE (à adapter avec les VRAIES colonnes) :
+Exemple 1 - Carte simple d'une table :
+Question : "Montre-moi une carte des épisodes résidentiels"
+Requête : 
 SELECT json_build_object(
     'type', 'FeatureCollection',
     'features', json_agg(
         json_build_object(
             'type', 'Feature',
-            'geometry', ST_AsGeoJSON([nom_colonne_géométrie])::json,
+            'geometry', ST_AsGeoJSON(l.geom)::json,
             'properties', json_build_object(
-                '[colonne1]', [colonne1],
-                '[colonne2]', [colonne2],
-                '[colonne3]', [colonne3]
-                -- Liste TOUTES les colonnes non-géométriques ici
+                'pk_residential_episode', re.pk_residential_episode,
+                'type_episode', re.type_episode,
+                'commune', l.commune
             )
         )
     )
 ) AS geojson
-FROM [nom_table];
+FROM residential_episode re
+JOIN localisation l ON re.fk_ref_loc = l.pk_ref_loc;
 
+Exemple 2 - Combiner plusieurs types avec UNION ALL :
+Question : "Carte des trajectoires résidentielles ET professionnelles"
+Requête :
+WITH combined AS (
+    SELECT 
+        l.geom,
+        re.pk_residential_episode::text AS episode_id,
+        re.type_episode,
+        l.commune,
+        'residential' AS category
+    FROM residential_episode re
+    JOIN localisation l ON re.fk_ref_loc = l.pk_ref_loc
+    
+    UNION ALL
+    
+    SELECT 
+        l.geom,
+        pe.pk_professionnal_episode::text AS episode_id,
+        pe.type_episode,
+        l.commune,
+        'professional' AS category
+    FROM professionnal_episode pe
+    JOIN localisation l ON pe.fk_ref_loc = l.pk_ref_loc
+)
+SELECT json_build_object(
+    'type', 'FeatureCollection',
+    'features', json_agg(
+        json_build_object(
+            'type', 'Feature',
+            'geometry', ST_AsGeoJSON(geom)::json,
+            'properties', json_build_object(
+                'episode_id', episode_id,
+                'type_episode', type_episode,
+                'commune', commune,
+                'category', category
+            )
+        )
+    )
+) AS geojson
+FROM combined;
+
+Exemple 3 - Avec filtre par coordonnées SPÉCIFIQUES (seulement si fournies) :
+Question : "Carte des épisodes résidentiels autour de Paris (2.3522, 48.8566)"
+Requête :
+SELECT json_build_object(
+    'type', 'FeatureCollection',
+    'features', json_agg(
+        json_build_object(
+            'type', 'Feature',
+            'geometry', ST_AsGeoJSON(l.geom)::json,
+            'properties', json_build_object(
+                'pk_residential_episode', re.pk_residential_episode,
+                'type_episode', re.type_episode,
+                'commune', l.commune
+            )
+        )
+    )
+) AS geojson
+FROM residential_episode re
+JOIN localisation l ON re.fk_ref_loc = l.pk_ref_loc
+WHERE ST_Distance(l.geom::geography, ST_GeomFromText('POINT(2.3522 48.8566)', 4326)::geography) < 100000;
 
 À TON TOUR - Question de l'utilisateur : {question}
 
-RAPPEL FINAL : Utilise UNIQUEMENT les colonnes qui existent réellement dans le schéma fourni !
+RAPPEL FINAL : 
+- N'utilise JAMAIS <longitude> ou <latitude> comme placeholders
+- Si pas de coordonnées spécifiques, pas de filtre de distance
+- Utilise UNION ALL dans une CTE (WITH) pour combiner plusieurs tables
+- Inclus toujours un champ 'category' ou 'type_episode' pour distinguer les points
 Requête SQL :
 """
     
@@ -482,12 +587,18 @@ Requête SQL :
     llm = ChatOpenAI(model="gpt-4o-mini", temperature=0)
     
     return (
-        RunnablePassthrough.assign(schema=lambda _: schema_text, requete_sql=lambda _: get_sql_chain(db).invoke({"question": "{question}", "chat_history": "{chat_history}","current_date": now}))
+        RunnablePassthrough.assign(
+            schema=lambda _: schema_text, 
+            requete_sql=lambda vars: get_sql_chain(db).invoke({
+                "question": vars.get("question", ""),
+                "chat_history": vars.get("chat_history", []),
+                "current_date": now
+            })
+        )
         | prompt
         | llm
         | StrOutputParser()
     )
-
 
 def display_schema(db: SQLDatabase):
     try:

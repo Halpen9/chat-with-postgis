@@ -252,7 +252,7 @@ def get_sql_chain(db):
     LIMIT 20;
 
 
-    Question : Quelles personnes ont vécu une trajectoire résidentielle longue (plus de 3 lieux différents) et ont connu au moins un événement familial et un événement professionnel dans des communes différentes ? (limite de 20)
+    Question : Quelles personnes ont vécu une trajectoire résidentielle diversifiée (plus de 3 lieux différents) et ont connu au moins un événement familial et un événement professionnel dans des communes différentes ? (limite de 20)
     Requête SQL : 
     WITH residential_count AS (
         SELECT 
@@ -360,6 +360,7 @@ def generate_graph_from_prompt(prompt, db): #c'est bon normalement
     )
     code = answer.output_text
     local_vars={}
+    print(code)
     exec(code,{"plt":plt,"io":io, "db":db}, local_vars)
     buf=io.BytesIO()
     plt.savefig(buf, format="png")
