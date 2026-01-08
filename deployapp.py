@@ -241,14 +241,32 @@ def get_sql_chain(db):
     ORDER BY r.date_debut;
 
 
-    Question : Quels événements professionnels ont eu lieu à moins de 50 km du lieu de naissance de chaque personne ? (limite de 20)
+    Question : Quels épisodes professionnels ont eu lieu à moins de 50 km du lieu de naissance des personnes ? (limite de 20)
     Requête SQL : 
-    SELECT pe.pk_professionnal_event, pe.type_event, p.pk_personne_id
-    FROM professionnal_event pe
-    JOIN personne p ON pe.fk_personne_id = p.pk_personne_id
-    JOIN localisation l_event ON pe.fk_ref_loc = l_event.pk_ref_loc
-    JOIN localisation l_personne ON p.fk_ref_loc = l_personne.pk_ref_loc
-    WHERE ST_Distance(l_event.geom::geography, l_personne.geom::geography) < 50000
+    SELECT 
+    pe.pk_professionnal_episode,
+    pe.type_episode,
+    pe.date_debut,
+    pe.date_fin,
+    p.pk_personne_id,
+    l_ep.commune AS lieu_episode,
+    l_birth.commune AS lieu_naissance,
+    ST_Distance(
+        l_ep.geom::geography,
+        l_birth.geom::geography
+    ) / 1000 AS distance_km
+    FROM professionnal_episode pe
+    JOIN personne p
+    ON pe.fk_personne_id = p.pk_personne_id
+    JOIN localisation l_ep
+    ON pe.fk_ref_loc = l_ep.pk_ref_loc
+    JOIN localisation l_birth
+    ON p.fk_ref_loc = l_birth.pk_ref_loc
+    WHERE ST_Distance(
+        l_ep.geom::geography,
+        l_birth.geom::geography
+    ) < 50000
+    ORDER BY distance_km
     LIMIT 20;
 
 
@@ -285,6 +303,50 @@ def get_sql_chain(db):
         AND fe.fk_ref_loc <> pe.fk_ref_loc
     LIMIT 20;
 
+    (alternative : Quelles personnes ont vécu une trajectoire résidentielle longue (plus de 3 lieux distincts) et ont connu au moins un épisode familial et un épisode professionnel, dont les événements associés ont eu lieu dans des communes différentes ?
+    Requête SQL :
+    WITH residential_count AS (
+        SELECT 
+            fk_personne_id,
+            COUNT(DISTINCT fk_ref_loc) AS nb_lieux
+        FROM residential_episode
+        WHERE fk_ref_loc IS NOT NULL
+        GROUP BY fk_personne_id
+    ),
+
+    familial_places AS (
+        SELECT DISTINCT
+            fe.fk_personne_id,
+            fe.fk_ref_loc
+        FROM familial_episode fep
+        JOIN familial_event fe
+        ON fe.fk_familial_episode = fep.pk_familial_episode
+        WHERE fe.fk_ref_loc IS NOT NULL
+    ),
+
+    professionnal_places AS (
+        SELECT DISTINCT
+            pe.fk_personne_id,
+            pe.fk_ref_loc
+        FROM professionnal_episode pep
+        JOIN professionnal_event pe
+        ON pe.fk_professionnal_episode = pep.pk_professionnal_episode
+        WHERE pe.fk_ref_loc IS NOT NULL
+    )
+
+    SELECT DISTINCT
+        rc.fk_personne_id,
+        rc.nb_lieux
+    FROM residential_count rc
+    JOIN familial_places fp
+    ON rc.fk_personne_id = fp.fk_personne_id
+    JOIN professionnal_places pp
+    ON rc.fk_personne_id = pp.fk_personne_id
+    WHERE rc.nb_lieux > 3
+    AND fp.fk_ref_loc <> pp.fk_ref_loc
+    ORDER BY rc.nb_lieux DESC
+    LIMIT 20;)
+
     À ton tour :
 
     Question : {question}
@@ -307,7 +369,7 @@ def get_rep(user_query: str, chat_history: list):
     prompt = """
     Tu es un spécialiste dans le sujet de la base de donnée qui est à ta disposition. Analyse la demande utilisateur et réponds UNIQUEMENT par :
     - "sql" si la question nécessite une requête SQL sur la base, c'est une base spatiale postgis.
-    - "image" si l'utilisateur veut une image, schéma, visualisation
+    - "image" si l'utilisateur veut une image, schéma, visualisation, graphique
     - "map" si l'utilisateur veut une carte, visualisation géographique
     Historique : {chat_history}
     Question : {question}
