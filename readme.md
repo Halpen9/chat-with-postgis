@@ -1,73 +1,123 @@
-# MySQL Python Chatbot with GPT-4 and Mistral AI
+# Application de chat PostGIS (local `Localapp.py` et déploiement `deployapp.py`)
 
-Welcome to the GitHub repository for our tutorial on building a natural language SQL chatbot using GPT-4! This project guides you through the development of a chatbot that can interpret natural language queries, generate SQL queries, and fetch results from a SQL database, all in an intuitive and user-friendly way. It utilizes the power of OpenAI's GPT-4 model, integrated with a Streamlit GUI for an enhanced interaction experience.
+Cette documentation détaille l’usage local et le déploiement Streamlit Cloud d’une application Streamlit qui interroge une base PostgreSQL/PostGIS en français. L’app génère des requêtes SQL (GPT-4o-mini), des graphiques (Matplotlib) et des cartes (Folium/GeoJSON) en tenant compte de l’historique de conversation.
 
-🟡 This repository serves as supporting material for the [YouTube video tutorial](https://youtu.be/YqqRkuizNN4).
+## Sommaire
+1. Fonctionnalités clés
+2. Architecture et flux
+3. Prérequis communs
+4. Configuration locale (Localapp.py)
+5. Déploiement Streamlit Cloud (deployapp.py)
+6. Détails techniques importants
+7. Dépannage rapide
+8. Commandes utiles
+9. Licence
 
-## Features
-- **Natural Language Processing**: Uses GPT-4 to interpret and respond to user queries in natural language.
-- **SQL Query Generation**: Dynamically generates SQL queries based on the user's natural language input.
-- **Database Interaction**: Connects to a SQL database to retrieve query results, demonstrating practical database interaction.
-- **Streamlit GUI**: Features a user-friendly interface built with Streamlit, making it easy for users of all skill levels.
-- **Python-based**: Entirely coded in Python, showcasing best practices in software development with modern technologies.
+## 1) Fonctionnalités clés
+- Requêtes SQL en français via GPT-4o-mini (contexte de conversation pris en compte).
+- Analyse spatiale PostGIS : détection des colonnes géométriques, export GeoJSON, cartes Folium avec tooltips.
+- Visualisations automatiques : code Matplotlib généré côté serveur, rendu en image base64.
+- Schéma enrichi : inspection SQLAlchemy + lecture de `geometry_columns` (type, SRID), fallback `db.get_table_info()`.
+- Router intelligent : classification des demandes en `sql`, `image`, ou `map`.
 
-## Brief Explanation of How the Chatbot Works
-
-The chatbot works by taking a user's natural language query, converting it into a SQL query using GPT-4, executing the query on a SQL database, and then presenting the results back to the user in natural language. This process involves several steps of data processing and interaction with the OpenAI API and a SQL database, all seamlessly integrated into a Streamlit application.
-
-Consider the following diagram to understand how the different chains and components are built:
-
-![Chatbot Architecture](./docs/mysql-chains.png)
-
-For a more detailed explanation and a step-by-step guide, refer this other video: [YouTube video tutorial](https://youtu.be/9ccl1_Wu24Q).
-
-For a more detailed explanation and a step-by-step guide, refer to the [YouTube video tutorial](Chat with MySQL Database with Python | LangChain Tutorial).
-
-## Installation
-Ensure you have Python installed on your machine. Then clone this repository:
-
-```bash
-git clone [repository-link]
-cd [repository-directory]
+## 2) Architecture et flux
 ```
+Question utilisateur
+  → get_rep() (router : sql / image / map)
+    ├─ sql   → get_sql_chain() → db.run → get_response() → réponse textuelle
+    ├─ image → generate_graph_from_prompt() → Matplotlib → base64 → affichage
+    └─ map   → get_geojson_chain() → db.run → GeoJSON → Folium → carte interactive
+```
+Principales fonctions (dans `deployapp.py`) :
+- `init_database()` : connexion PostgreSQL.
+- `schema_with_geo_via_geoalchemy()` : schéma enrichi (tables/colonnes + geometry_columns).
+- `get_sql_chain()` : génération de requêtes SQL par LLM.
+- `get_response()` : orchestre schéma + requête SQL + exécution + réponse LLM.
+- `get_geojson_chain()` : requêtes GeoJSON prêtes pour Folium.
+- `generate_graph_from_prompt()` : code Matplotlib généré et exécuté.
+- `genere_titre()` : titres contextuels (graphique ou carte) basés sur la demande et l’historique.
 
-Install the required packages:
+## 3) Prérequis communs
+- Python 3.8+
+- PostgreSQL 12+ avec extension PostGIS (`CREATE EXTENSION postgis;`)
+- Accès API OpenAI (GPT-4o-mini)
+- (Optionnel) LangSmith pour le tracing
+- Paquets (voir `requirements.txt`) : Streamlit, LangChain (core/community/openai/groq), psycopg2-binary, geoalchemy2, folium, streamlit-folium, matplotlib, Pillow, python-dotenv, openai, sqlalchemy.
 
+## 4) Configuration locale (Localapp.py)
+1. Créez un `.env` à la racine :
+```
+OPENAI_API_KEY=xxxxxxxx
+POSTGRES_HOST=localhost
+POSTGRES_PORT=5432
+POSTGRES_USER=postgres
+POSTGRES_PASSWORD=motdepasse
+POSTGRES_DATABASE=ma_base
+# Optionnel LangSmith
+LANGCHAIN_TRACING_V2=true
+LANGCHAIN_API_KEY=cle_langsmith
+LANGCHAIN_PROJECT=mon_projet
+```
+2. Installez les dépendances :
 ```bash
 pip install -r requirements.txt
 ```
-
-Create your own .env file with the necessary variables, including your OpenAI API key:
-
+3. Lancez en local :
 ```bash
-OPENAI_API_KEY=[your-openai-api-key]
+streamlit run Localapp.py
 ```
+4. Flux local :
+   - `.env` chargé (python-dotenv) → variables pour DB et OpenAI.
+   - Sidebar : bouton **Connection** → instancie la DB, récupère le schéma.
+   - Saisie utilisateur → router (sql/image/map) → rendu (texte, image, carte).
 
-## Usage
-To launch the Streamlit app and interact with the chatbot:
+## 5) Déploiement Streamlit Cloud (deployapp.py)
+1. Créez `.streamlit/secrets.toml` (non commité) :
+```toml
+# LangChain
+LANGCHAIN_TRACING_V2 = "true"
+LANGCHAIN_API_KEY = "votre_cle_langsmith"
+LANGCHAIN_PROJECT = "nom_du_projet"
 
-```bash
-streamlit run app.py
+# OpenAI
+OPENAI_API_KEY = "votre_cle_openai"
+
+# PostgreSQL
+[postgres]
+host = "votre_host"
+port = "5432"
+user = "votre_utilisateur"
+password = "votre_mot_de_passe"
+database = "nom_base_de_donnees"
 ```
+2. Sur Streamlit Cloud, définissez `deployapp.py` comme entrypoint.
+3. Après déploiement : ouvrez l’URL, cliquez sur **Connection** pour initialiser la DB et récupérer le schéma, puis posez vos questions.
 
-## Contributing
-As this repository accompanies the [YouTube video tutorial](https://youtu.be/YqqRkuizNN4), we are primarily focused on providing a comprehensive learning experience. Contributions for bug fixes or typos are welcome.
+## 6) Détails techniques importants
+- Distances / PostGIS : cast `::geography` + `ST_Distance` imposés dans les prompts (évite `ST_DistanceSphere`).
+- Conversion sûre texte → entier :
+  ```sql
+  CAST(NULLIF(regexp_replace(colonne, '\\D', '', 'g'), '') AS INTEGER)
+  ```
+  pour éviter les échecs sur des champs texte non numériques.
+- Schéma enrichi : inspection SQLAlchemy + table `geometry_columns`, fallback `db.get_table_info()` si besoin.
+- Debug : expanders Streamlit affichent la requête SQL générée et le résultat brut (diagnostic GeoJSON/SQL).
+- Session : cartes et graphiques stockés dans `st.session_state` pour réaffichage sans régénération.
 
-## License
-This project is licensed under the MIT License - see the LICENSE file for details.
+## 7) Dépannage rapide
+- Connexion DB : vérifier host/port/user/password/database dans `.env` ou `secrets.toml`; tester `psql`.
+- PostGIS : `SELECT PostGIS_Version();` et `SELECT * FROM geometry_columns;`.
+- OpenAI : clé valide, quotas disponibles, accès au modèle `gpt-4o-mini`.
+- GeoJSON vide ou invalide : vérifier la colonne géométrique, le SRID (souvent 4326), consulter l’expander debug.
+
+## 8) Commandes utiles
+- Local : `streamlit run Localapp.py`
+- Cloud : URL Streamlit Cloud (entrypoint `deployapp.py`)
+
+## 9) Licence
+
+Ce projet a été développé dans le cadre d'un stage académique à des fins éducatives et de démonstration. 
+
 
 ---
-
-**Note**: This project is intended for educational and research purposes. Please ensure compliance with the terms of use and guidelines of any APIs or services used.
-
----
-
-We hope this repository aids in your exploration of integrating AI with web technologies. For more informative tutorials, be sure to check out [Your YouTube Channel].
-
-Happy Coding! 🚀👨‍💻🤖
-
----
-
-*If you find this project helpful, please consider giving it a star!*
-
----
+Documentation mise à jour : Janvier 2026
