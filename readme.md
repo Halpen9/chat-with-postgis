@@ -1,6 +1,6 @@
 # Application de chat PostGIS (local `Localapp.py` et déploiement `deployapp.py`)
 
-Cette documentation détaille l’usage local et le déploiement Streamlit Cloud d’une application Streamlit qui interroge une base PostgreSQL/PostGIS en français. L’app génère des requêtes SQL (GPT-4o-mini), des graphiques (Matplotlib) et des cartes (Folium/GeoJSON) en tenant compte de l’historique de conversation.
+Cette documentation détaille l’usage local et le déploiement Streamlit Cloud d’une application Streamlit qui interroge une base PostgreSQL/PostGIS en français. L’app génère des requêtes SQL (GPT-4o-mini), des graphiques (Matplotlib) et des cartes (Folium/GeoJSON) en tenant compte de l’historique de conversation. Vous pouvez tester directement l’application déployée ici : https://chat-with-postgis-udd2bspgtlyphkkjoqwzlb.streamlit.app/
 
 ## Sommaire
 1. Fonctionnalités clés
